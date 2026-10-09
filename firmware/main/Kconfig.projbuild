@@ -1,0 +1,36 @@
+menu "Dura M3000 app console"
+
+config DURA_SERIAL_CONSOLE_STACK_SIZE
+    int "Serial command console task stack size"
+    range 2048 32768
+    default 8192
+    help
+        Stack size for the Dura UART command console task. The console reads from
+        ESP-IDF stdin/stdout on the configured UART0 console path for Dura M3000 S3.
+
+config DURA_APP_COMMAND_STACK_SIZE
+    int "Application command processor task stack size"
+    range 4096 32768
+    default 16384
+    help
+        Stack size for the Dura command execution task shared by UART and BLE.
+        This task may run built-in diagnostics and meter command paths, so it
+        needs more stack than the UART reader task.
+
+config DURA_APP_M3000_LEGACY_ONLY
+    bool "Build M3000 as local legacy meter only"
+    default y
+    help
+        Dura M3000 is the ESP32 implementation of the legacy single-meter firmware.
+        Keep ESP-NOW/NOW-network behavior disabled here. Dura V2 is the product
+        variant that layers NOW-network behavior on top of M3000.
+
+config DURA_APP_QEMU_NO_RADIO
+    bool "QEMU regression mode: disable radio stacks"
+    default n
+    help
+        For ESP32-S3 QEMU command-regression builds, skip WiFi/ESP-NOW/BLE init
+        and use local no-radio peer stubs so app command tests can run end to end.
+        Keep disabled for hardware builds.
+
+endmenu
