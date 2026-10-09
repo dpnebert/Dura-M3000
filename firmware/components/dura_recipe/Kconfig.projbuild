@@ -1,0 +1,23 @@
+menu "Dura M3000 recipe storage"
+
+config DURA_RECIPE_MAX_NAME_LEN
+    int "Recipe name buffer bytes"
+    range 8 128
+    default 32
+
+config DURA_RECIPE_MAX_LIQUID_NAME_LEN
+    int "Liquid name buffer bytes"
+    range 8 128
+    default 32
+
+config DURA_RECIPE_MAX_INGREDIENTS
+    int "Maximum ingredients per recipe"
+    range 1 64
+    default 16
+
+config DURA_RECIPE_MAX_CUSTOM_LIQUIDS
+    int "Maximum custom liquid profiles"
+    range 1 128
+    default 32
+
+endmenu

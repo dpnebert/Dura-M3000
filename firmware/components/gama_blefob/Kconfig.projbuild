@@ -1,0 +1,279 @@
+menu "Reusable ESP BLE shell"
+
+    menu "Identity / reported information"
+
+        config BLE_SHELL_DEVICE_NAME
+            string "Default BLE device name"
+            default "esp-ble-shell"
+
+        config BLE_SHELL_PROJECT_ID
+            string "Project identifier"
+            default "ESP-BLE-SHELL"
+
+        config BLE_SHELL_MODULE_NAME
+            string "Module name"
+            default "ESP-BLE-MODULE"
+            help
+                Board/module assembly name. Example: ESP32-C6-MINI-1. This is
+                reported over BLE so field logs can identify the actual module used.
+
+        config BLE_SHELL_MODULE_VERSION
+            string "Module version"
+            default "UNSET"
+            help
+                Board/module hardware version or revision. Example: 02, v1.1, RevB.
+
+        config BLE_SHELL_FIRMWARE_VERSION
+            string "Firmware version string"
+            default "0.2.0"
+
+
+        config BLE_SHELL_DEFAULT_SERIAL_ID
+            string "Default serial ID before provisioning"
+            default "UNSET"
+
+    endmenu
+
+    menu "Advertising / pairing window"
+
+        config BLE_SHELL_PAIR_ADV_SECONDS
+            int "Advertising / pairing window duration (whole seconds)"
+            range 1 600
+            default 60
+            help
+                Whole-second advertising/pairing window duration. Runtime commands
+                use integer seconds only; no fractional advertising windows.
+
+        config BLE_SHELL_ADV_MIN_DURATION_MS
+            int "Minimum NimBLE advertising restart duration (ms)"
+            range 1 600000
+            default 100
+            help
+                Lower bound passed to NimBLE when only a small amount of the current
+                whole-second advertising window remains.
+
+        config BLE_SHELL_ADV_ON_BOOT
+            bool "Open BLE advertising window at boot"
+            default y
+            help
+                Convenient for bench testing. Disable for production pair-button-only
+                behavior.
+
+    endmenu
+
+    menu "Pair button"
+
+        config BLE_SHELL_PAIR_BUTTON_GPIO
+            int "Pair button GPIO (-1 disables physical button)"
+            range -1 48
+            default -1
+            help
+                Optional product GPIO used to open the BLE advertising/pairing window
+                for the configured number of seconds. Leave at -1 when the application
+                owns the physical pairing workflow or no button is assigned.
+
+        config BLE_SHELL_PAIR_BUTTON_ACTIVE_LOW
+            bool "Pair button is active-low"
+            default y
+
+        config BLE_SHELL_PAIR_BUTTON_PULLUP
+            bool "Enable internal pull-up on pair button"
+            default y
+
+        config BLE_SHELL_PAIR_BUTTON_PULLDOWN
+            bool "Enable internal pull-down on pair button"
+            default n
+
+        config BLE_SHELL_PAIR_BUTTON_DEBOUNCE_MS
+            int "Pair button debounce time (ms)"
+            range 1 1000
+            default 50
+
+        config BLE_SHELL_PAIR_BUTTON_POLL_MS
+            int "Pair button poll interval (ms)"
+            range 1 1000
+            default 20
+
+        config BLE_SHELL_PAIR_BUTTON_TASK_PRIORITY
+            int "Pair button task priority"
+            range 1 24
+            default 5
+
+        config BLE_SHELL_PAIR_BUTTON_TASK_STACK
+            int "Pair button task stack size"
+            range 1024 32768
+            default 2048
+
+    endmenu
+
+    menu "Tasking / queue timing"
+
+        config BLE_SHELL_REBOOT_DELAY_MS
+            int "Reboot command delay (ms)"
+            range 0 10000
+            default 200
+            help
+                Delay after sending the BLE reboot response before esp_restart().
+
+        config BLE_SHELL_QUEUE_RECEIVE_TIMEOUT_MS
+            int "BLE shell queue receive poll interval (ms)"
+            range 1 60000
+            default 1000
+
+        config BLE_SHELL_TASK_PRIORITY
+            int "BLE shell task priority"
+            range 1 24
+            default 5
+
+        config BLE_SHELL_DIAGNOSTIC_TASK_STACK
+            int "BLE shell command/diagnostic task stack size"
+            range 2048 32768
+            default 4096
+
+    endmenu
+
+    menu "Queue / payload / buffer sizing"
+
+        config BLE_SHELL_EVENT_QUEUE_LEN
+            int "BLE shell event queue length"
+            range 1 64
+            default 16
+
+        config BLE_SHELL_MAX_PAYLOAD
+            int "BLE shell max payload / JSON buffer bytes"
+            range 64 6144
+            default 6144
+
+        config BLE_SHELL_MAX_NAME_LEN
+            int "BLE shell max device name bytes"
+            range 8 64
+            default 32
+
+        config BLE_SHELL_STRING_FIELD_LEN
+            int "BLE shell internal string field bytes"
+            range 8 128
+            default 32
+
+        config BLE_SHELL_JSON_ESCAPE_BUF_LEN
+            int "BLE shell JSON escaped field buffer bytes"
+            range 32 256
+            default 64
+
+        config BLE_SHELL_MAC_STRING_LEN
+            int "BLE MAC string buffer bytes"
+            range 18 32
+            default 18
+
+        config BLE_SHELL_JSON_UNICODE_ESCAPE_LEN
+            int "JSON unicode escape temp buffer bytes"
+            range 7 16
+            default 7
+
+        config BLE_SHELL_SEMVER_FIELD_COUNT
+            int "Firmware semantic version field count"
+            range 3 3
+            default 3
+
+    endmenu
+
+    menu "Advertising manufacturer data"
+
+        config BLE_SHELL_MFG_DATA_LEN
+            int "BLE advertising manufacturer data length"
+            range 8 31
+            default 8
+
+        config BLE_SHELL_MFG_COMPANY_ID
+            hex "BLE advertising manufacturer company ID placeholder"
+            range 0x0000 0xFFFF
+            default 0xFFFF
+            help
+                Placeholder company identifier placed in advertising manufacturer
+                data bytes 0..1, little-endian. Replace before production if needed.
+
+    endmenu
+
+    menu "Device Information Service UUIDs"
+
+        config BLE_SHELL_UUID_DIS_SERVICE
+            hex "Device Information Service UUID16"
+            range 0x0001 0xFFFF
+            default 0x180A
+
+        config BLE_SHELL_UUID_DIS_MANUFACTURER
+            hex "DIS manufacturer characteristic UUID16"
+            range 0x0001 0xFFFF
+            default 0x2A29
+
+        config BLE_SHELL_UUID_DIS_MODEL
+            hex "DIS model characteristic UUID16"
+            range 0x0001 0xFFFF
+            default 0x2A24
+
+        config BLE_SHELL_UUID_DIS_SERIAL
+            hex "DIS serial characteristic UUID16"
+            range 0x0001 0xFFFF
+            default 0x2A25
+
+        config BLE_SHELL_UUID_DIS_HW_REV
+            hex "DIS hardware revision characteristic UUID16"
+            range 0x0001 0xFFFF
+            default 0x2A27
+
+        config BLE_SHELL_UUID_DIS_FW_REV
+            hex "DIS firmware revision characteristic UUID16"
+            range 0x0001 0xFFFF
+            default 0x2A26
+
+    endmenu
+
+    menu "Security"
+
+        choice BLE_SHELL_SECURITY_MODE
+            prompt "Default BLE shell command security mode"
+            default BLE_SHELL_SECURITY_OPEN
+            help
+                OPEN allows unrestricted maintenance access. PAIR_WINDOW_REQUIRED restricts
+                maintenance/dangerous commands to the active physical pair window.
+                UNLOCK_COMMAND_REQUIRED requires the unlock command token below.
+
+            config BLE_SHELL_SECURITY_OPEN
+                bool "Open / bench-test mode"
+
+            config BLE_SHELL_SECURITY_PAIR_WINDOW_REQUIRED
+                bool "Require active Pair/Learn window for maintenance commands"
+
+            config BLE_SHELL_SECURITY_UNLOCK_COMMAND_REQUIRED
+                bool "Require unlock command token for maintenance commands"
+        endchoice
+
+        config BLE_SHELL_UNLOCK_TOKEN
+            string "Unlock token for maintenance commands"
+            default ""
+            help
+                Used only when unlock-command security is selected. Keep empty for
+                bench-only builds; set per product for deployed maintenance access.
+
+    endmenu
+
+
+    menu "Status flag bit masks"
+
+        config BLE_SHELL_STATUS_FAULT_MASK
+            hex "Fault status flag mask"
+            range 0x00000001 0xFFFFFFFF
+            default 0x01
+
+        config BLE_SHELL_STATUS_DIAGNOSTIC_MASK
+            hex "Diagnostic status flag mask"
+            range 0x00000001 0xFFFFFFFF
+            default 0x02
+
+        config BLE_SHELL_STATUS_UNLOCKED_MASK
+            hex "Unlocked status flag mask"
+            range 0x00000001 0xFFFFFFFF
+            default 0x04
+
+    endmenu
+
+endmenu

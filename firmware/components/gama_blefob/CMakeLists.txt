@@ -1,0 +1,12 @@
+idf_component_register(SRCS "gama_blefob.c"
+                    "gama_blefob_advertising.c"
+                    "gama_blefob_commands.c"
+                    "gama_blefob_config.c"
+                    "gama_blefob_gatt.c"
+                    "gama_blefob_notify.c"
+                    "gama_blefob_pair_button.c"
+                    "gama_blefob_status.c"
+                    "gama_blefob_util.c"
+                    INCLUDE_DIRS "include"
+                    PRIV_INCLUDE_DIRS "."
+                    REQUIRES bt nvs_flash esp_timer esp_driver_gpio esp_system)

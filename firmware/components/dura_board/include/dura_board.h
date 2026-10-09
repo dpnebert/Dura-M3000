@@ -1,0 +1,325 @@
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+#include "driver/gpio.h"
+#include "esp_err.h"
+#include "hal/adc_types.h"
+#include "sdkconfig.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Dura M3000 board wiring is selected through CONFIG_DURA_BOARD_* Kconfig options.
+// GPIO numbers, input biasing, and active levels are editable in menuconfig.
+// Default hardware is PCB832 revX3 with ESP32-S3-WROOM-1-N8R2 (8 MB flash).
+// Avoid GPIO22-GPIO25 because they are invalid on ESP32-S3.
+// Reserve module flash/PSRAM memory-bus pins; PSRAM is present but unused by policy.
+#ifndef CONFIG_DURA_BOARD_S3_WROOM_1
+#define CONFIG_DURA_BOARD_S3_WROOM_1 1
+#define CONFIG_DURA_BOARD_NAME "ESP32-S3-WROOM-1"
+#endif
+#ifndef CONFIG_DURA_BOARD_ENABLE_HARDWARE_TASK
+#define CONFIG_DURA_BOARD_ENABLE_HARDWARE_TASK 0
+#endif
+#ifndef CONFIG_DURA_BOARD_ENABLE_PUMP_OUTPUT
+#define CONFIG_DURA_BOARD_ENABLE_PUMP_OUTPUT 0
+#endif
+#ifndef CONFIG_DURA_BOARD_ENABLE_EV_OUTPUTS
+#define CONFIG_DURA_BOARD_ENABLE_EV_OUTPUTS 0
+#endif
+#ifndef CONFIG_DURA_BOARD_ENABLE_RECIRC_INPUT
+#define CONFIG_DURA_BOARD_ENABLE_RECIRC_INPUT 0
+#endif
+#ifndef CONFIG_DURA_BOARD_ENABLE_DEEP_SLEEP
+#define CONFIG_DURA_BOARD_ENABLE_DEEP_SLEEP 0
+#endif
+#ifndef CONFIG_DURA_BOARD_ENABLE_LEGACY_POWER_OUTPUTS
+#define CONFIG_DURA_BOARD_ENABLE_LEGACY_POWER_OUTPUTS 0
+#endif
+#ifndef CONFIG_DURA_BOARD_ENABLE_EXT_POWER_PRESENT_INPUT
+#define CONFIG_DURA_BOARD_ENABLE_EXT_POWER_PRESENT_INPUT 0
+#endif
+#ifndef CONFIG_DURA_BOARD_BLE_REQUIRES_EXT_POWER
+#define CONFIG_DURA_BOARD_BLE_REQUIRES_EXT_POWER 0
+#endif
+#ifndef CONFIG_DURA_BOARD_GPIO_EXT_POWER_PRESENT
+#define CONFIG_DURA_BOARD_GPIO_EXT_POWER_PRESENT 3
+#endif
+
+#ifndef CONFIG_DURA_BOARD_FLOW_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_FLOW_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_FLOW_PULLUP
+#define CONFIG_DURA_BOARD_FLOW_PULLUP 0
+#endif
+#ifndef CONFIG_DURA_BOARD_FLOW_PULLDOWN
+#define CONFIG_DURA_BOARD_FLOW_PULLDOWN 0
+#endif
+#ifndef CONFIG_DURA_BOARD_BUTTON_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_BUTTON_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_BUTTON_PULLUP
+#define CONFIG_DURA_BOARD_BUTTON_PULLUP 0
+#endif
+#ifndef CONFIG_DURA_BOARD_BUTTON_PULLDOWN
+#define CONFIG_DURA_BOARD_BUTTON_PULLDOWN 0
+#endif
+#ifndef CONFIG_DURA_BOARD_LCD_CS_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_LCD_CS_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_LCD_RST_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_LCD_RST_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_LCD_BACKLIGHT_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_LCD_BACKLIGHT_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_PUMP_OUTPUT_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_PUMP_OUTPUT_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_RECIRC_INPUT_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_RECIRC_INPUT_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_RECIRC_INPUT_PULLUP
+#define CONFIG_DURA_BOARD_RECIRC_INPUT_PULLUP 0
+#endif
+#ifndef CONFIG_DURA_BOARD_RECIRC_INPUT_PULLDOWN
+#define CONFIG_DURA_BOARD_RECIRC_INPUT_PULLDOWN 0
+#endif
+#ifndef CONFIG_DURA_BOARD_RECIRC_EV_OUTPUT_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_RECIRC_EV_OUTPUT_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_INJECT_EV_OUTPUT_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_INJECT_EV_OUTPUT_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_BOOST_ENABLE_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_BOOST_ENABLE_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_BOOST_DISABLE_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_BOOST_DISABLE_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_BATTERY_DISCONNECT_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_BATTERY_DISCONNECT_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_SW_LO_ENABLE1_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_SW_LO_ENABLE1_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_SW_LO_ENABLE2_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_SW_LO_ENABLE2_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_EXT_POWER_PRESENT_ACTIVE_LOW
+#define CONFIG_DURA_BOARD_EXT_POWER_PRESENT_ACTIVE_LOW 0
+#endif
+#ifndef CONFIG_DURA_BOARD_EXT_POWER_PRESENT_PULLUP
+#define CONFIG_DURA_BOARD_EXT_POWER_PRESENT_PULLUP 0
+#endif
+#ifndef CONFIG_DURA_BOARD_EXT_POWER_PRESENT_PULLDOWN
+#define CONFIG_DURA_BOARD_EXT_POWER_PRESENT_PULLDOWN 0
+#endif
+#define DURA_GPIO_FROM_CONFIG(name)        ((gpio_num_t)CONFIG_DURA_BOARD_GPIO_##name)
+#define DURA_ACTIVE_LEVEL(active_low)      ((active_low) ? 0 : 1)
+#define DURA_INACTIVE_LEVEL(active_low)    ((active_low) ? 1 : 0)
+
+#define DURA_GPIO_FLOW_A              DURA_GPIO_FROM_CONFIG(FLOW_A)
+#define DURA_GPIO_FLOW_B              DURA_GPIO_FROM_CONFIG(FLOW_B)
+#define DURA_GPIO_KEY_1               DURA_GPIO_FROM_CONFIG(KEY_1)
+#define DURA_GPIO_BATTERY_ADC         DURA_GPIO_FROM_CONFIG(BATTERY_ADC)
+// DURA_BATT_ADC uses a high-impedance 1M/1M divider. If the 100 nF ADC cap is
+// hard-discharged in sleep/reset, Rth is about 500 kΩ, so τ ≈ 50 ms and 5τ ≈
+// 250 ms. Wait at least this long after wake before trusting the first battery
+// reading; discard early/first ADC samples if the measurement path was just enabled.
+#define DURA_BATTERY_ADC_WAKE_SETTLE_MS 250U
+// ESP-IDF v5 names the legacy 11 dB range as ADC_ATTEN_DB_12; ADC_ATTEN_DB_11 is a deprecated alias.
+#define DURA_BATTERY_ADC_ATTEN        ADC_ATTEN_DB_12
+#define DURA_GPIO_FIELD_SENSE_ADC     DURA_GPIO_FROM_CONFIG(FIELD_SENSE_ADC)
+#define DURA_FIELD_SENSE_ADC_ATTEN    ADC_ATTEN_DB_12
+#define DURA_GPIO_EXT_POWER_PRESENT   DURA_GPIO_FROM_CONFIG(EXT_POWER_PRESENT)
+#define DURA_GPIO_KEY_2               DURA_GPIO_FROM_CONFIG(KEY_2)
+#define DURA_GPIO_LCD_SPI_CLK         DURA_GPIO_FROM_CONFIG(LCD_SPI_CLK)
+#define DURA_GPIO_LCD_SPI_MOSI        DURA_GPIO_FROM_CONFIG(LCD_SPI_MOSI)
+#define DURA_GPIO_LCD_CS              DURA_GPIO_FROM_CONFIG(LCD_CS)
+#define DURA_GPIO_LCD_A0_DC           DURA_GPIO_FROM_CONFIG(LCD_A0_DC)
+#define DURA_GPIO_LCD_RST             DURA_GPIO_FROM_CONFIG(LCD_RST)
+#define DURA_GPIO_LCD_BACKLIGHT       DURA_GPIO_FROM_CONFIG(LCD_BACKLIGHT)
+#define DURA_GPIO_PUMP_OUTPUT         DURA_GPIO_FROM_CONFIG(PUMP_OUTPUT)
+#define DURA_GPIO_RECIRC_INPUT        DURA_GPIO_FROM_CONFIG(RECIRC_INPUT)
+#define DURA_GPIO_RECIRC_EV_OUTPUT    DURA_GPIO_FROM_CONFIG(RECIRC_EV_OUTPUT)
+#define DURA_GPIO_INJECT_EV_OUTPUT    DURA_GPIO_FROM_CONFIG(INJECT_EV_OUTPUT)
+#define DURA_GPIO_BOOST_ENABLE        DURA_GPIO_FROM_CONFIG(BOOST_ENABLE)
+#define DURA_GPIO_BOOST_DISABLE       DURA_GPIO_FROM_CONFIG(BOOST_DISABLE)
+#define DURA_GPIO_BATTERY_DISCONNECT  DURA_GPIO_FROM_CONFIG(BATTERY_DISCONNECT)
+#define DURA_GPIO_SW_LO_ENABLE1       DURA_GPIO_FROM_CONFIG(SW_LO_ENABLE1)
+#define DURA_GPIO_SW_LO_ENABLE2       DURA_GPIO_FROM_CONFIG(SW_LO_ENABLE2)
+#define DURA_GPIO_KEY_3               DURA_GPIO_FROM_CONFIG(KEY_3)
+#define DURA_GPIO_KEY_4               DURA_GPIO_FROM_CONFIG(KEY_4)
+
+#define DURA_FLOW_ACTIVE_LEVEL        DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_FLOW_ACTIVE_LOW)
+#define DURA_FLOW_INTR_TYPE           (CONFIG_DURA_BOARD_FLOW_ACTIVE_LOW ? GPIO_INTR_NEGEDGE : GPIO_INTR_POSEDGE)
+#define DURA_BUTTON_ACTIVE_LEVEL      DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_BUTTON_ACTIVE_LOW)
+
+#define DURA_LCD_CS_ACTIVE_LEVEL      DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_LCD_CS_ACTIVE_LOW)
+#define DURA_LCD_CS_INACTIVE_LEVEL    DURA_INACTIVE_LEVEL(CONFIG_DURA_BOARD_LCD_CS_ACTIVE_LOW)
+#define DURA_LCD_RST_ACTIVE_LEVEL     DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_LCD_RST_ACTIVE_LOW)
+#define DURA_LCD_RST_INACTIVE_LEVEL   DURA_INACTIVE_LEVEL(CONFIG_DURA_BOARD_LCD_RST_ACTIVE_LOW)
+#define DURA_LCD_BACKLIGHT_ACTIVE_LEVEL   DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_LCD_BACKLIGHT_ACTIVE_LOW)
+#define DURA_LCD_BACKLIGHT_INACTIVE_LEVEL DURA_INACTIVE_LEVEL(CONFIG_DURA_BOARD_LCD_BACKLIGHT_ACTIVE_LOW)
+
+#define DURA_PUMP_OUTPUT_ACTIVE_LEVEL        DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_PUMP_OUTPUT_ACTIVE_LOW)
+#define DURA_PUMP_OUTPUT_INACTIVE_LEVEL      DURA_INACTIVE_LEVEL(CONFIG_DURA_BOARD_PUMP_OUTPUT_ACTIVE_LOW)
+#define DURA_RECIRC_INPUT_ACTIVE_LEVEL       DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_RECIRC_INPUT_ACTIVE_LOW)
+#define DURA_RECIRC_EV_ACTIVE_LEVEL          DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_RECIRC_EV_OUTPUT_ACTIVE_LOW)
+#define DURA_RECIRC_EV_INACTIVE_LEVEL        DURA_INACTIVE_LEVEL(CONFIG_DURA_BOARD_RECIRC_EV_OUTPUT_ACTIVE_LOW)
+#define DURA_INJECT_EV_ACTIVE_LEVEL          DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_INJECT_EV_OUTPUT_ACTIVE_LOW)
+#define DURA_INJECT_EV_INACTIVE_LEVEL        DURA_INACTIVE_LEVEL(CONFIG_DURA_BOARD_INJECT_EV_OUTPUT_ACTIVE_LOW)
+#define DURA_RECIRC_EV_OUTPUT_INACTIVE_LEVEL DURA_RECIRC_EV_INACTIVE_LEVEL
+#define DURA_INJECT_EV_OUTPUT_INACTIVE_LEVEL DURA_INJECT_EV_INACTIVE_LEVEL
+#define DURA_BOOST_ENABLE_ACTIVE_LEVEL       DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_BOOST_ENABLE_ACTIVE_LOW)
+#define DURA_BOOST_ENABLE_INACTIVE_LEVEL     DURA_INACTIVE_LEVEL(CONFIG_DURA_BOARD_BOOST_ENABLE_ACTIVE_LOW)
+#define DURA_BOOST_DISABLE_ACTIVE_LEVEL      DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_BOOST_DISABLE_ACTIVE_LOW)
+#define DURA_BOOST_DISABLE_INACTIVE_LEVEL    DURA_INACTIVE_LEVEL(CONFIG_DURA_BOARD_BOOST_DISABLE_ACTIVE_LOW)
+#define DURA_BATTERY_DISCONNECT_ACTIVE_LEVEL DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_BATTERY_DISCONNECT_ACTIVE_LOW)
+#define DURA_BATTERY_DISCONNECT_INACTIVE_LEVEL DURA_INACTIVE_LEVEL(CONFIG_DURA_BOARD_BATTERY_DISCONNECT_ACTIVE_LOW)
+#define DURA_SW_LO_ENABLE1_ACTIVE_LEVEL      DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_SW_LO_ENABLE1_ACTIVE_LOW)
+#define DURA_SW_LO_ENABLE1_INACTIVE_LEVEL    DURA_INACTIVE_LEVEL(CONFIG_DURA_BOARD_SW_LO_ENABLE1_ACTIVE_LOW)
+#define DURA_SW_LO_ENABLE2_ACTIVE_LEVEL      DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_SW_LO_ENABLE2_ACTIVE_LOW)
+#define DURA_SW_LO_ENABLE2_INACTIVE_LEVEL    DURA_INACTIVE_LEVEL(CONFIG_DURA_BOARD_SW_LO_ENABLE2_ACTIVE_LOW)
+#define DURA_EXT_POWER_PRESENT_ACTIVE_LEVEL  DURA_ACTIVE_LEVEL(CONFIG_DURA_BOARD_EXT_POWER_PRESENT_ACTIVE_LOW)
+
+#ifndef CONFIG_DURA_BOARD_TASK_STACK
+#define CONFIG_DURA_BOARD_TASK_STACK 4096
+#endif
+#ifndef CONFIG_DURA_BOARD_TASK_PRIORITY
+#define CONFIG_DURA_BOARD_TASK_PRIORITY 5
+#endif
+#ifndef CONFIG_DURA_BOARD_UI_PERIOD_MS
+#define CONFIG_DURA_BOARD_UI_PERIOD_MS 100
+#endif
+#ifndef CONFIG_DURA_BOARD_SAVE_PERIOD_MS
+#define CONFIG_DURA_BOARD_SAVE_PERIOD_MS 5000
+#endif
+#ifndef CONFIG_DURA_BOARD_SETTINGS_HOLD_MS
+#define CONFIG_DURA_BOARD_SETTINGS_HOLD_MS 1500
+#endif
+
+#define DURA_BOARD_TASK_STACK         CONFIG_DURA_BOARD_TASK_STACK
+#define DURA_BOARD_TASK_PRIORITY      CONFIG_DURA_BOARD_TASK_PRIORITY
+#define DURA_BOARD_UI_PERIOD_MS       CONFIG_DURA_BOARD_UI_PERIOD_MS
+#define DURA_BOARD_SAVE_PERIOD_MS     CONFIG_DURA_BOARD_SAVE_PERIOD_MS
+
+typedef enum {
+    DURA_BUTTON_NONE = 0,
+    DURA_BUTTON_UP,
+    DURA_BUTTON_DOWN,
+    DURA_BUTTON_SELECT,
+    DURA_BUTTON_BACK,
+} dura_button_t;
+
+/* Stable wire IDs inherited from the legacy firmware. These values are part
+ * of the app/BLE contract; they are deliberately not C enum ordinals. */
+typedef enum {
+    DURA_UI_LEGACY_SCREEN_EDIT = 0,
+    DURA_UI_LEGACY_SCREEN_HOME = 30,
+    DURA_UI_LEGACY_SCREEN_RUN = 40,
+    DURA_UI_LEGACY_SCREEN_INFO = 50,
+    DURA_UI_LEGACY_SCREEN_SCAN = 60,
+    DURA_UI_LEGACY_SCREEN_COMPANY = 70,
+    DURA_UI_LEGACY_SCREEN_CALIBRATION = 80,
+    DURA_UI_LEGACY_SCREEN_BATCH = 90,
+} dura_ui_legacy_screen_id_t;
+
+typedef enum {
+    DURA_UI_LEGACY_MENU_NONE = 0xffff,
+    DURA_UI_LEGACY_MENU_SETUP_FIRST = 0,
+    DURA_UI_LEGACY_MENU_HOME = 2,
+    DURA_UI_LEGACY_MENU_METER_RESET = 12,
+    DURA_UI_LEGACY_MENU_BATCH_RESET = 13,
+    DURA_UI_LEGACY_MENU_TOTAL_RESET = 14,
+    DURA_UI_LEGACY_MENU_INFO_HELP_FIRST = 18,
+    DURA_UI_LEGACY_MENU_INFO_START = 26,
+    DURA_UI_LEGACY_MENU_HEALTH = 27,
+    DURA_UI_LEGACY_MENU_CAL_START = 30,
+    DURA_UI_LEGACY_MENU_PRECAL_FIRST = 31,
+    DURA_UI_LEGACY_MENU_PRECAL_SECOND = 32,
+    DURA_UI_LEGACY_MENU_QUICK_CAL = 33,
+    DURA_UI_LEGACY_MENU_BUCKET_GALLON = 34,
+    DURA_UI_LEGACY_MENU_BUCKET_LITER = 39,
+    DURA_UI_LEGACY_MENU_CAL_ADJUST = 44,
+    DURA_UI_LEGACY_MENU_CAL_SAVE_FIRST = 45,
+    DURA_UI_LEGACY_MENU_CAL_SAVE_SECOND = 46,
+    DURA_UI_LEGACY_MENU_BATCH_SET = 47,
+    DURA_UI_LEGACY_MENU_BATCH_RUN = 48,
+    DURA_UI_LEGACY_MENU_COMPANY = 51,
+    DURA_UI_LEGACY_MENU_SW_VERSION = 53,
+    DURA_UI_LEGACY_MENU_AUTO_BATCH_EDIT = 56,
+    DURA_UI_LEGACY_MENU_AUTO_BATCH_RUN = 57,
+    DURA_UI_LEGACY_MENU_BATCH_COMPLETE = 58,
+    DURA_UI_LEGACY_MENU_FLOW_ERROR = 59,
+} dura_ui_legacy_menu_id_t;
+
+typedef struct {
+    uint64_t generation;
+    uint16_t legacy_screen_id;
+    uint16_t legacy_menu_id;
+    uint8_t selected_units;
+    uint8_t backlight_timeout_sec;
+    uint8_t batch_mode;
+    uint8_t calibration_mode;
+    bool pump_enabled;
+    bool fault_latched;
+    bool show_flow_rate;
+    bool show_auto_batch;
+    bool show_batch_total;
+    uint32_t fault_code;
+    uint32_t calibration_counts;
+    float meter_total;
+    float batch_total;
+    float total_total;
+    float remaining_batch;
+    float flow_rate;
+    float batch_amount;
+    float calibration_measured_amount;
+} dura_board_ui_snapshot_t;
+
+typedef void (*dura_board_ui_change_cb_t)(const dura_board_ui_snapshot_t *snapshot,
+                                          void *context);
+
+typedef enum {
+    DURA_WAKE_GROUP_NONE = 0,
+    DURA_WAKE_GROUP_BUTTON = (1U << 0),
+    DURA_WAKE_GROUP_FLOW = (1U << 1),
+} dura_wake_group_t;
+
+esp_err_t dura_board_init(void);
+esp_err_t dura_board_start(void);
+esp_err_t dura_board_enqueue_button(dura_button_t button);
+esp_err_t dura_board_get_ui_snapshot(dura_board_ui_snapshot_t *snapshot);
+esp_err_t dura_board_set_ui_change_callback(dura_board_ui_change_cb_t callback, void *context);
+esp_err_t dura_board_sync_outputs(void);
+esp_err_t dura_board_render_debug_screen(void);
+/* Non-board callers enqueue an owner-task request (ESP_OK means accepted,
+ * not asleep). Known BLE connections veto; final controller race is unresolved. */
+esp_err_t dura_board_enter_deep_sleep(void);
+esp_err_t dura_board_set_ble_connected(bool connected);
+/* Sleep admission only; passive transport/recovery must not relight the LCD. */
+void dura_board_note_activity(void);
+/* Task-context accepted user action / qualified flow. Refreshes sleep and the
+ * independent backlight timer; board owner applies OFF/10–30s policy to GPIO. */
+void dura_board_note_user_activity(void);
+esp_err_t dura_board_init_power_sense(void);
+void dura_board_dump_button_io_config(const char *reason);
+bool dura_board_ext_power_present(void);
+const char *dura_board_power_source_name(void);
+esp_err_t dura_board_set_boost_enabled(bool enabled);
+bool dura_board_boost_enabled(void);
+uint32_t dura_board_take_flow_pulses(void);
+dura_button_t dura_board_poll_button(void);
+uint64_t dura_board_button_wake_mask(void);
+uint64_t dura_board_flow_wake_mask(void);
+uint64_t dura_board_combined_wake_mask(void);
+dura_wake_group_t dura_board_wake_group_from_ext1_status(uint64_t ext1_status);
+const char *dura_board_wake_group_name(dura_wake_group_t group);
+
+#ifdef __cplusplus
+}
+#endif

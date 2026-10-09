@@ -1,0 +1,595 @@
+menu "Dura M3000 board"
+
+config DURA_BOARD_S3_WROOM_1
+    bool "ESP32-S3-WROOM-1"
+    default y
+    help
+        PCB832 revX3 uses ESP32-S3-WROOM-1-N8R2, 8 MB flash and 2 MB PSRAM.
+        PSRAM remains unused by policy. GPIO26-GPIO32 are internal memory bus
+        pins; GPIO35-GPIO37 remain available on the N8R2 module.
+
+config DURA_BOARD_NAME
+    string
+    default "ESP32-S3-WROOM-1"
+
+menu "Volume display precision"
+
+config DURA_BOARD_VOLUME_GALLON_DECIMALS
+    int "Gallon quantity decimal places"
+    range 0 2
+    default 2
+    help
+        Decimal places for gallon quantities in Manual, Auto and Recirc edit/run
+        displays. Independent of liter and ounce settings. Above the shared
+        cutoff at most one decimal is shown; zero remains zero. Display only:
+        metering/storage precision, edit rounding and run truncation are unchanged.
+
+config DURA_BOARD_VOLUME_LITER_DECIMALS
+    int "Liter quantity decimal places"
+    range 0 2
+    default 2
+    help
+        Decimal places for liter quantities in Manual, Auto and Recirc edit/run
+        displays. Independent of gallon and ounce settings. Above the shared
+        cutoff at most one decimal is shown; zero remains zero. Display only:
+        metering/storage precision, edit rounding and run truncation are unchanged.
+
+config DURA_BOARD_VOLUME_OUNCE_DECIMALS
+    int "Ounce quantity decimal places"
+    range 0 2
+    default 2
+    help
+        Decimal places for ounce quantities in Manual, Auto and Recirc edit/run
+        displays. Independent of gallon and liter settings. Above the shared
+        cutoff at most one decimal is shown; zero remains zero. Display only:
+        metering/storage precision, edit rounding and run truncation are unchanged.
+
+config DURA_BOARD_VOLUME_2DP_LIMIT_TENTHS
+    int "Two-decimal quantity cutoff (tenths of selected volume unit)"
+    range 0 999999
+    default 1999
+    help
+        Inclusive cutoff in tenths: 1999 means 199.9 in whichever volume unit
+        is selected, not a converted physical volume. At or below it use that
+        unit's configured decimals. Above it cap decimals at one, preserving
+        zero. Applies to Manual/Auto/Recirc quantities only, not rates or
+        calibration values. Existing fonts/layout are unchanged; increasing
+        this cutoff or displaying large quantities does not guarantee LCD fit.
+
+endmenu
+
+config DURA_BOARD_ENABLE_HARDWARE_TASK
+    bool "Enable Dura M3000 physical board task"
+    default n
+    help
+        Starts the physical board layer: GPIO configuration, flow pulse ISR,
+        button polling, ST7567 LCD refresh, meter save timer, and output sync.
+        Keep disabled for ESP-NOW/BLE bench testing unless real hardware wiring
+        is connected and the GPIO map has been reviewed.
+
+config DURA_BOARD_ENABLE_PUMP_OUTPUT
+    bool "Allow Dura M3000 pump output drive"
+    depends on DURA_BOARD_ENABLE_HARDWARE_TASK
+    default y
+    help
+        Allows the board task to drive DURA_GPIO_PUMP_OUTPUT from meter state.
+        The full-function PCB832 revX3 profile enables this gate on GPIO47.
+        GPIO21 is now Flow A, not the old LED-only bench output. Disable this
+        gate to leave the pump GPIO unconfigured; no software drive is applied.
+
+menu "Dura M3000 GPIO map"
+
+menu "Flow inputs"
+
+config DURA_BOARD_GPIO_FLOW_A
+    int "Flow A pulse input GPIO"
+    range 0 48
+    default 21
+    help
+        Primary flow pulse input. Counted by the runtime ISR and included in
+        the deep-sleep EXT1 wake mask. Avoid ESP32-S3 invalid GPIO22-GPIO25
+        and reserve module flash/PSRAM memory-bus pins.
+
+config DURA_BOARD_GPIO_FLOW_B
+    int "Flow B pulse input GPIO"
+    range 0 48
+    default 2
+    help
+        Secondary flow/reed input. Both reeds use the runtime ISR with
+        cross-interlocked counting and are included in the EXT1 wake mask.
+
+config DURA_BOARD_FLOW_ACTIVE_LOW
+    bool "Flow pulse is active-low / falling-edge"
+    default n
+    help
+        When enabled, flow counting uses falling-edge interrupts and treats the
+        active flow pulse level as 0. When disabled, it uses rising-edge pulses.
+
+config DURA_BOARD_FLOW_PULLUP
+    bool "Enable internal pull-up on flow inputs"
+    default n
+
+config DURA_BOARD_FLOW_PULLDOWN
+    bool "Enable internal pull-down on flow inputs"
+    default y
+    help
+        Do not enable both pull-up and pull-down unless intentionally biasing
+        the input both ways. Keep external biasing explicit for low-power
+        sleep/wake behavior.
+
+endmenu
+
+menu "Buttons / keypad inputs"
+
+config DURA_BOARD_GPIO_KEY_1
+    int "Key 1 / Up GPIO"
+    range 0 48
+    default 4
+
+config DURA_BOARD_GPIO_KEY_2
+    int "Key 2 / Down GPIO"
+    range 0 48
+    default 5
+
+config DURA_BOARD_GPIO_KEY_3
+    int "Key 3 / Select GPIO"
+    range 0 48
+    default 6
+
+config DURA_BOARD_GPIO_KEY_4
+    int "Key 4 / Back GPIO"
+    range 0 48
+    default 7
+
+config DURA_BOARD_BUTTON_ACTIVE_LOW
+    bool "Buttons are active-low"
+    default y
+    help
+        Applies to up, down, select, and back buttons. Dura M3000 ESP32-S3 uses
+        active-low buttons with internal pullups and EXT1 wake-on-any-low.
+
+config DURA_BOARD_BUTTON_PULLUP
+    bool "Enable internal pull-up on button inputs"
+    default y
+
+config DURA_BOARD_BUTTON_PULLDOWN
+    bool "Enable internal pull-down on button inputs"
+    default n
+    help
+        Do not enable both pull-up and pull-down unless intentionally biasing
+        the input both ways.
+
+endmenu
+
+menu "Customer Recirc input"
+
+config DURA_BOARD_ENABLE_RECIRC_INPUT
+    bool "Enable separate yellow Recirc push-button input"
+    depends on DURA_BOARD_ENABLE_HARDWARE_TASK
+    default n
+    help
+        Enables the separate Recirc button, enabled by the full-function
+        PCB832 revX3 profile. Its external divider is active-high; disable
+        internal pulls. GPIO35 is polled while awake, not an EXT1 wake source.
+        A press opens Recirc only while the Main Menu is displayed.
+
+config DURA_BOARD_GPIO_RECIRC_INPUT
+    int "Separate Recirc push-button GPIO"
+    range 0 48
+    default 35
+
+config DURA_BOARD_RECIRC_INPUT_ACTIVE_LOW
+    bool "Separate Recirc push-button is active-low"
+    depends on DURA_BOARD_ENABLE_RECIRC_INPUT
+    default n
+
+config DURA_BOARD_RECIRC_INPUT_PULLUP
+    bool "Enable internal pull-up on separate Recirc input"
+    depends on DURA_BOARD_ENABLE_RECIRC_INPUT
+    default n
+
+config DURA_BOARD_RECIRC_INPUT_PULLDOWN
+    bool "Enable internal pull-down on separate Recirc input"
+    depends on DURA_BOARD_ENABLE_RECIRC_INPUT
+    default n
+
+endmenu
+
+menu "LCD / display"
+
+config DURA_BOARD_GPIO_LCD_SPI_CLK
+    int "LCD SPI clock GPIO"
+    range 0 48
+    default 9
+    help
+        ST7567 software-SPI clock output. This is a product LCD serial clock,
+        not the ESP32-S3 flash/PSRAM memory SPI bus.
+
+config DURA_BOARD_GPIO_LCD_SPI_MOSI
+    int "LCD SPI MOSI GPIO"
+    range 0 48
+    default 10
+    help
+        ST7567 software-SPI data output. This is a product LCD serial data line,
+        not the ESP32-S3 flash/PSRAM memory SPI bus.
+
+config DURA_BOARD_GPIO_LCD_CS
+    int "LCD chip-select GPIO"
+    range 0 48
+    default 11
+    help
+        ST7567 chip-select output.
+
+config DURA_BOARD_GPIO_LCD_A0_DC
+    int "LCD A0 / D-C GPIO"
+    range 0 48
+    default 12
+    help
+        ST7567 command/data select output.
+
+config DURA_BOARD_GPIO_LCD_RST
+    int "LCD reset GPIO"
+    range 0 48
+    default 13
+    help
+        ST7567 reset output.
+
+config DURA_BOARD_GPIO_LCD_BACKLIGHT
+    int "LCD backlight GPIO"
+    range 0 48
+    default 14
+    help
+        LCD backlight control output.
+
+config DURA_BOARD_LCD_CS_ACTIVE_LOW
+    bool "LCD chip-select is active-low"
+    default y
+
+config DURA_BOARD_LCD_RST_ACTIVE_LOW
+    bool "LCD reset is active-low"
+    default y
+
+config DURA_BOARD_LCD_BACKLIGHT_ACTIVE_LOW
+    bool "LCD backlight enable is active-low"
+    default n
+
+config DURA_BOARD_LCD_HOLD_SPLASH_ON_BOOT
+    bool "Leave LCD boot splash on-screen"
+    default n
+    help
+        Temporary bench-validation mode. When enabled, draws the legacy Dura
+        splash at LCD init and prevents the board debug/status renderer from
+        overwriting it. Keep disabled for recipe/NOW bring-up so the LCD shows
+        live pump, batch, coordinator, and peer state.
+
+choice DURA_LCD_SPLASH_ORIENTATION
+    prompt "LCD splash bitmap orientation"
+    default DURA_LCD_SPLASH_ORIENTATION_PIXEL_RENDERER
+    help
+        Select how the legacy 128x64 GLCD splash bytes are mapped into the
+        ESP32 framebuffer. Use this during bench verification, then collapse to
+        the confirmed mapping and apply the same convention to remaining assets.
+
+config DURA_LCD_SPLASH_ORIENTATION_DIRECT
+    bool "Direct framebuffer copy"
+
+config DURA_LCD_SPLASH_ORIENTATION_REVERSE_PAGES
+    bool "Reverse 8-pixel page order"
+
+config DURA_LCD_SPLASH_ORIENTATION_FLIP_BITS
+    bool "Reverse vertical bit order inside each byte"
+
+config DURA_LCD_SPLASH_ORIENTATION_REVERSE_PAGES_AND_FLIP_BITS
+    bool "Reverse pages and vertical bits"
+
+config DURA_LCD_SPLASH_ORIENTATION_PIXEL_RENDERER
+    bool "Draw through legacy bitmap pixel renderer"
+
+endchoice
+
+endmenu
+
+menu "Pump / metering output"
+
+config DURA_BOARD_GPIO_PUMP_OUTPUT
+    int "Pump/output driver command GPIO"
+    range 0 48
+    default 47
+    help
+        Logic output to the pump/output driver. When the feature is enabled,
+        firmware initializes inactive and follows serialized meter intent.
+        When disabled, this GPIO is left unconfigured (not a driven OFF).
+
+config DURA_BOARD_PUMP_OUTPUT_ACTIVE_LOW
+    bool "Pump/output command is active-low"
+    default n
+
+endmenu
+
+menu "Customer EV command outputs"
+
+config DURA_BOARD_ENABLE_EV_OUTPUTS
+    bool "Allow Recirc/Calibration and Injection EV output drive"
+    depends on DURA_BOARD_ENABLE_HARDWARE_TASK
+    default n
+    help
+        Configures GPIO17/18 as active-high Recirc/Injection commands in the
+        full-function PCB832 revX3 profile. Physical interface acceptance is
+        separate from software enablement. When disabled, firmware leaves both
+        assigned GPIOs unconfigured/high-impedance.
+
+config DURA_BOARD_GPIO_RECIRC_EV_OUTPUT
+    int "Recirc/Calibration EV command GPIO"
+    range 0 48
+    default 17
+
+config DURA_BOARD_GPIO_INJECT_EV_OUTPUT
+    int "Injection EV command GPIO"
+    range 0 48
+    default 18
+
+config DURA_BOARD_RECIRC_EV_OUTPUT_ACTIVE_LOW
+    bool "Recirc/Calibration EV command is active-low"
+    depends on DURA_BOARD_ENABLE_EV_OUTPUTS
+    default n
+
+config DURA_BOARD_INJECT_EV_OUTPUT_ACTIVE_LOW
+    bool "Injection EV command is active-low"
+    depends on DURA_BOARD_ENABLE_EV_OUTPUTS
+    default n
+
+endmenu
+
+menu "Power / voltage sense"
+
+config DURA_BOARD_GPIO_BATTERY_ADC
+    int "Battery ADC GPIO"
+    range 0 48
+    default 1
+    help
+        Battery sense ADC input. Round 3 uses a 1M/1M divider. If the optional
+        100 nF ADC cap is hard-discharged in sleep/reset, Rth is about 500 kΩ,
+        so τ ≈ 50 ms and 5τ ≈ 250 ms. Wait after wake before reading this ADC
+        node, and discard early/first samples if the measurement path was just
+        enabled. Confirm ADC channel and divider values against the final
+        ESP32-S3 schematic before PCB release.
+
+config DURA_BOARD_ENABLE_EXT_POWER_PRESENT_INPUT
+    bool "Use external-power-present GPIO"
+    default n
+    help
+        Enable when the schematic provides a protected logic input that is true
+        only when the DPM/field supply is present. This lets firmware treat the
+        battery as backup/auxiliary and suppress high-power features such as BLE
+        when the unit is on backup battery only.
+
+config DURA_BOARD_GPIO_EXT_POWER_PRESENT
+    int "External-power-present GPIO"
+    depends on DURA_BOARD_ENABLE_EXT_POWER_PRESENT_INPUT
+    range 0 48
+    default 3
+    help
+        Candidate protected digital input for EXT_POWER_PRESENT / FIELD_POWER_OK.
+        Keep the schematic reset-safe and bias-defined; do not connect this pin
+        directly to field voltage without protection/translation.
+
+config DURA_BOARD_EXT_POWER_PRESENT_ACTIVE_LOW
+    bool "External-power-present input is active-low"
+    depends on DURA_BOARD_ENABLE_EXT_POWER_PRESENT_INPUT
+    default n
+
+config DURA_BOARD_EXT_POWER_PRESENT_PULLUP
+    bool "Enable internal pull-up on external-power-present input"
+    depends on DURA_BOARD_ENABLE_EXT_POWER_PRESENT_INPUT
+    default n
+
+config DURA_BOARD_EXT_POWER_PRESENT_PULLDOWN
+    bool "Enable internal pull-down on external-power-present input"
+    depends on DURA_BOARD_ENABLE_EXT_POWER_PRESENT_INPUT
+    default y
+
+config DURA_BOARD_BLE_REQUIRES_EXT_POWER
+    bool "Suppress BLE when external power is absent"
+    depends on DURA_BOARD_ENABLE_EXT_POWER_PRESENT_INPUT
+    default y
+    help
+        Dura M3000 battery is intended as auxiliary/backup power. When enabled,
+        boot-time BLE init/advertising is skipped if EXT_POWER_PRESENT is false,
+        avoiding BLE drain while the product is running from backup battery only.
+
+config DURA_BOARD_GPIO_FIELD_SENSE_ADC
+    int "Field SENSE voltage ADC GPIO"
+    range 0 48
+    default 8
+    help
+        PCB832 revX3 routes protected FIELD_SENSE to GPIO8. This option reserves
+        the analog input assignment; it does not add a runtime field-voltage
+        acquisition path or change the existing battery measurement behavior.
+
+endmenu
+
+menu "Optional / legacy power-control outputs"
+
+config DURA_BOARD_ENABLE_LEGACY_POWER_OUTPUTS
+    bool "Expose and configure legacy boost/battery/low-side outputs"
+    default n
+    help
+        Current ESP32 redesign notes say to omit the legacy boost regulator / FET
+        power architecture unless it is explicitly re-added. Leave this disabled
+        unless the schematic really contains these control nets and their
+        reset-safe states have been reviewed.
+
+config DURA_BOARD_GPIO_BOOST_ENABLE
+    int "Legacy boost enable GPIO"
+    depends on DURA_BOARD_ENABLE_LEGACY_POWER_OUTPUTS
+    range 0 48
+    default 38
+    help
+        Legacy Dura boost-enable control net. This is not assumed to be present
+        on the current ESP32 redesign unless the power architecture explicitly
+        includes it.
+
+config DURA_BOARD_GPIO_BOOST_DISABLE
+    int "Legacy boost disengage/disable GPIO"
+    depends on DURA_BOARD_ENABLE_LEGACY_POWER_OUTPUTS
+    range 0 48
+    default 39
+    help
+        Legacy Dura boost-disengage/disable net. Historical docs show both
+        BOOST_ENABLE and BOOST_DISENGAGE-style control/bias nets, but current
+        ESP32 redesign notes say to omit this power-switch network unless
+        explicitly re-added.
+
+config DURA_BOARD_GPIO_BATTERY_DISCONNECT
+    int "Legacy battery-disconnect GPIO"
+    depends on DURA_BOARD_ENABLE_LEGACY_POWER_OUTPUTS
+    range 0 48
+    default 40
+    help
+        Legacy battery-disconnect command. Review polarity and self-power-removal
+        behavior before use.
+
+config DURA_BOARD_GPIO_SW_LO_ENABLE1
+    int "Optional low-side switch enable 1 GPIO"
+    depends on DURA_BOARD_ENABLE_LEGACY_POWER_OUTPUTS
+    range 0 48
+    default 41
+    help
+        Optional/DNP low-side switch capability breakout.
+
+config DURA_BOARD_GPIO_SW_LO_ENABLE2
+    int "Optional low-side switch enable 2 GPIO"
+    depends on DURA_BOARD_ENABLE_LEGACY_POWER_OUTPUTS
+    range 0 48
+    default 42
+    help
+        Optional/DNP low-side switch capability breakout.
+
+config DURA_BOARD_BOOST_ENABLE_ACTIVE_LOW
+    bool "Legacy boost enable is active-low"
+    depends on DURA_BOARD_ENABLE_LEGACY_POWER_OUTPUTS
+    default n
+
+config DURA_BOARD_BOOST_DISABLE_ACTIVE_LOW
+    bool "Legacy boost disengage/disable is active-low"
+    depends on DURA_BOARD_ENABLE_LEGACY_POWER_OUTPUTS
+    default n
+
+config DURA_BOARD_BATTERY_DISCONNECT_ACTIVE_LOW
+    bool "Legacy battery-disconnect is active-low"
+    depends on DURA_BOARD_ENABLE_LEGACY_POWER_OUTPUTS
+    default n
+
+config DURA_BOARD_SW_LO_ENABLE1_ACTIVE_LOW
+    bool "Optional low-side switch enable 1 is active-low"
+    depends on DURA_BOARD_ENABLE_LEGACY_POWER_OUTPUTS
+    default n
+
+config DURA_BOARD_SW_LO_ENABLE2_ACTIVE_LOW
+    bool "Optional low-side switch enable 2 is active-low"
+    depends on DURA_BOARD_ENABLE_LEGACY_POWER_OUTPUTS
+    default n
+
+endmenu
+
+endmenu
+
+menu "Dura M3000 power management"
+
+config DURA_BOARD_ENABLE_DEEP_SLEEP
+    bool "Enable inactivity-driven deep sleep"
+    depends on DURA_BOARD_ENABLE_HARDWARE_TASK
+    default y
+    help
+        Enables inactivity-driven deep sleep. Sleep is blocked while dispensing,
+        calibrating, paused, faulted, or connected to a BLE client. All four local
+        push buttons and both flow inputs remain EXT1 wake sources.
+
+config DURA_BOARD_DEEP_SLEEP_DELAY_SEC
+    int "Deep-sleep inactivity delay (seconds)"
+    depends on DURA_BOARD_ENABLE_DEEP_SLEEP
+    range 5 86400
+    default 60
+    help
+        Compile-time inactivity delay before deep sleep. This is independent of
+        the legacy UI Meter Timeout setting so a build can define one explicit,
+        reviewable sleep interval.
+
+endmenu
+
+menu "Dura M3000 board task timing"
+
+config DURA_BOARD_TASK_STACK
+    int "Dura board task stack size"
+    range 2048 32768
+    default 4096
+
+config DURA_BOARD_TASK_PRIORITY
+    int "Dura board task priority"
+    range 1 24
+    default 5
+
+config DURA_BOARD_UI_PERIOD_MS
+    int "Dura board UI refresh period (ms)"
+    range 10 60000
+    default 100
+
+config DURA_BOARD_SAVE_PERIOD_MS
+    int "Dura board meter save period (ms)"
+    range 100 600000
+    default 5000
+
+endmenu
+
+menu "Dura M3000 UI behavior"
+
+config DURA_BOARD_LOW_BATTERY_THRESHOLD_PERCENT
+    int "Low-battery blink threshold (percent)"
+    range 0 100
+    default 20
+    help
+        Battery percentages strictly below this value blink. Set to zero to
+        disable the low-battery blink warning.
+
+config DURA_BOARD_LOW_BATTERY_BLINK_ON_MS
+    int "Low-battery percentage ON duration (ms)"
+    range 100 60000
+    default 1000
+
+config DURA_BOARD_LOW_BATTERY_BLINK_OFF_MS
+    int "Low-battery percentage OFF duration (ms)"
+    range 100 60000
+    default 1000
+
+config DURA_BOARD_BUTTON_HOLD_MAX_RATE_X
+    int "Held-button maximum repeat rate multiplier"
+    range 1 100
+    default 10
+    help
+        Held adjustment buttons use rate=max_rate*x/(1+x), where x is the
+        continuous hold duration in seconds. The default asymptote is 10x.
+
+config DURA_BOARD_SETTINGS_HOLD_MS
+    int "Outside-button hold time for Program Settings (ms)"
+    range 500 10000
+    default 1500
+
+endmenu
+
+menu "Dura M3000 LCD geometry"
+
+config DURA_LCD_WIDTH
+    int "LCD width (pixels)"
+    range 1 320
+    default 128
+
+config DURA_LCD_HEIGHT
+    int "LCD height (pixels)"
+    range 8 240
+    default 64
+    help
+        Must be divisible by 8 for the ST7567 page-addressed framebuffer.
+
+endmenu
+
+endmenu
