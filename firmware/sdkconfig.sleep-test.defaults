@@ -1,0 +1,6 @@
+# Deep-sleep validation overlay. Physical outputs remain disabled so sleep/wake
+# can be exercised independently before any command-output bench testing.
+CONFIG_DURA_BOARD_ENABLE_DEEP_SLEEP=y
+# CONFIG_DURA_BOARD_ENABLE_PUMP_OUTPUT is not set
+# CONFIG_DURA_BOARD_ENABLE_RECIRC_INPUT is not set
+# CONFIG_DURA_BOARD_ENABLE_EV_OUTPUTS is not set

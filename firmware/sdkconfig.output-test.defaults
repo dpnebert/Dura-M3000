@@ -1,0 +1,7 @@
+# Full-output, no-sleep test overlay for PCB832 revX3. The normal profile also
+# enables these outputs, with sleep enabled. Physical output/interface
+# acceptance remains operator-owned; applying this overlay is not authorization.
+CONFIG_DURA_BOARD_ENABLE_PUMP_OUTPUT=y
+CONFIG_DURA_BOARD_ENABLE_RECIRC_INPUT=y
+CONFIG_DURA_BOARD_ENABLE_EV_OUTPUTS=y
+# CONFIG_DURA_BOARD_ENABLE_DEEP_SLEEP is not set
