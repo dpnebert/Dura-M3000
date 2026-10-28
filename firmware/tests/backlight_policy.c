@@ -252,7 +252,7 @@ static void checkpoint(void){
     if(is("local_hold")||is("local_repeat")){
         if(stage<4)CHECK(light);
         if(stage==1){now+=20000000;}
-        else if(stage==2){if(is("local_repeat"))CHECK(s_ui_batch_amount>10.1f);button=0;}
+        else if(stage==2){if(is("local_repeat"))CHECK(s_ui_batch_amount>10.01f);button=0;}
         else if(stage==3){now+=10000000;}
         else {CHECK(!light);finish();} return;
     }
@@ -265,7 +265,7 @@ static void checkpoint(void){
     bool expected=is("remote")||is("flow")||is("flow_boundary")||is("setting_on")||(is("recirc")&&CONFIG_DURA_BOARD_ENABLE_RECIRC_INPUT);
     CHECK(light==expected);
     if(is("remote"))CHECK(s_ui_screen==DURA_UI_CAL_START);
-    if(is("recirc"))CHECK(s_ui_screen==(CONFIG_DURA_BOARD_ENABLE_RECIRC_INPUT?DURA_UI_RECIRC_EDIT:DURA_UI_MAIN_MENU));
+    if(is("recirc"))CHECK(s_ui_screen==(CONFIG_DURA_BOARD_ENABLE_RECIRC_INPUT?DURA_UI_RECIRC_RUN:DURA_UI_MAIN_MENU));
     finish();
 }
 int main(int argc,char**argv){

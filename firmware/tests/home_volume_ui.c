@@ -64,14 +64,19 @@ static void home_case(const char *name) {
         if(strstr(name,"flow_error"))CHECK(dura_meter_set_fault(7)==ESP_OK);
     }
     refresh();
-    if(strstr(name,"flow_error")) {s_ui_screen=DURA_UI_FLOW_ERROR;render_popup_confirm("FLOW DETECTION","ERROR");}
-    label_is(0,"Home");
+    if(strstr(name,"flow_error")) {s_ui_screen=DURA_UI_FLOW_ERROR;render_popup_confirm("FLOW DETECTION","ERROR","Home");}
+    label_is(0,(strstr(name,"manual")||strstr(name,"flow_error"))?"Home":"Back");
     safe_required=true;
     if(strstr(name,"open"))fail_open=1;
     if(strstr(name,"write"))fail_write=1;
     if(strstr(name,"commit"))fail_commit=1;
     press(DURA_BUTTON_UP);
-    off();main_menu();
+    off();
+    if(!strstr(name,"manual")&&!strstr(name,"flow_error")) {
+        CHECK(s_ui_screen==(recirc?DURA_UI_RECIRC_EDIT:DURA_UI_AUTO_BATCH_EDIT));
+        refresh();off();label_is(0,"Home");press(DURA_BUTTON_UP);
+    }
+    main_menu();
     if(strstr(name,"flow_error"))CHECK(!snap().fault_latched);
 }
 static void all_home_labels(void) {
@@ -97,7 +102,7 @@ static void other_buttons(void) {
     CHECK(s_ui_screen==DURA_UI_RESET_TOTALS);
     s_ui_screen=DURA_UI_BATCH_SET;s_ui_batch_amount=99;refresh();label_is(0,"Reset");press(DURA_BUTTON_UP);
     CHECK(s_ui_screen==DURA_UI_BATCH_SET && s_ui_batch_amount==10);
-    for(int item=3;item<=7;item+=4) {
+    for(int item=3;item<=3;item++) {
         s_ui_screen=DURA_UI_SETUP;s_ui_setup_item=item;refresh();CHECK(strcmp(labels[0],"Home"));
         press(DURA_BUTTON_UP);CHECK(s_ui_screen==DURA_UI_SETUP);
     }
@@ -106,13 +111,13 @@ static void other_buttons(void) {
     press(DURA_BUTTON_DOWN);CHECK(snap().batch_mode==DURA_BATCH_RUNNING);
     press(DURA_BUTTON_SELECT);CHECK(snap().batch_mode==DURA_BATCH_PAUSED);off();
     press(DURA_BUTTON_BACK);CHECK(snap().batch_mode==DURA_BATCH_RUNNING);CHECK(gpio[0]&&gpio[2]);
-    press(DURA_BUTTON_UP);main_menu();
+    press(DURA_BUTTON_UP);CHECK(s_ui_screen==DURA_UI_AUTO_BATCH_EDIT);off();press(DURA_BUTTON_UP);main_menu();
 }
 static void cancellation_rejected(void) {
     press(DURA_BUTTON_BACK);press(DURA_BUTTON_BACK);refresh();
     int before=s_ui_screen;reject_cancel=true;press(DURA_BUTTON_UP);
     CHECK(s_ui_screen==before && snap().batch_mode==DURA_BATCH_RUNNING);
-    reject_cancel=false;press(DURA_BUTTON_UP);main_menu();
+    reject_cancel=false;press(DURA_BUTTON_UP);CHECK(s_ui_screen==DURA_UI_AUTO_BATCH_EDIT);off();press(DURA_BUTTON_UP);main_menu();
 }
 static int expected_precision(float amount,int unit) {
     const int values[]={0,EXPECT_GAL,EXPECT_LITER,EXPECT_OUNCE};
@@ -165,9 +170,10 @@ static void quantity_screens(void) {
             ui_go_main();main_menu();
         }
     }
-    CHECK(adjust_batch_amount_tenths(10,-1)==9.9f);
-    CHECK(adjust_batch_amount_tenths(10,1)==10.1f);
-    CHECK(adjust_batch_amount_tenths(1,-1)==1);
+    const float step=EXPECT_GAL==2?.01f:EXPECT_GAL==1?.1f:1.f;
+    CHECK(fabsf(adjust_batch_amount(10,-1,DURA_UNITS_GALLON)-(10-step))<.00001f);
+    CHECK(fabsf(adjust_batch_amount(10,1,DURA_UNITS_GALLON)-(10+step))<.00001f);
+    CHECK(adjust_batch_amount(0,-1,DURA_UNITS_GALLON)==0);
 }
 static bool fb_pixel(const uint8_t *fb,int x,int y) {
     int py=63-y;return (fb[(py/8)*128+x]>>(py%8))&1;

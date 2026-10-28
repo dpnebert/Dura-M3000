@@ -93,7 +93,7 @@ int nvs_set_u8(int h, const char *k, uint8_t v)
 {
     int e = nvs_set_u32(h, k, v);
     if (!e && !strcmp(k, "precal_sel")) staged.selected_precal_profile = v;
-    if (!e && !strcmp(k, "quick_ref")) staged.quick_cal_reference = v;
+    if (!e && !strcmp(k, "quick_ref_v2")) staged.quick_cal_reference = v;
     return e;
 }
 int nvs_set_blob(int h, const char *k, const void *v, size_t n)
@@ -154,7 +154,7 @@ static void successful(bool quick, unsigned slot)
     same_coefficients(s.working_coefficients, committed.working_coefficients);
     if (quick) {
         CHECK(s.quick_cal_reference == 1 && committed.quick_cal_reference == 1);
-        CHECK(fabsf(s.working_coefficients.gallon_per_count - before.precal_profiles[0].gallon_per_count * 0.84f) < 1e-8f);
+        CHECK(fabsf(s.working_coefficients.gallon_per_count - before.precal_profiles[0].gallon_per_count * 1.03f) < 1e-8f);
         CHECK(!memcmp(s.precal_profiles, before.precal_profiles, sizeof(s.precal_profiles)));
     } else {
         CHECK(s.selected_precal_profile == slot && committed.selected_precal_profile == slot);

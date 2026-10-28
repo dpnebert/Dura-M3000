@@ -61,6 +61,7 @@ static uint8_t s_last_valid_reed;
 static int s_ui_screen;
 static float s_ui_batch_amount;
 static int home_calls, activity_calls;
+static int start_calls;
 static bool recirc_was_pressed;
 static int64_t s_last_activity_us;
 #define ESP_RETURN_ON_ERROR(expr, ...) do { esp_err_t e_ = (expr); if (e_ != ESP_OK) return e_; } while (0)
@@ -104,6 +105,7 @@ esp_err_t dura_meter_get_snapshot(dura_meter_snapshot_t *snapshot)
 static void publish_ui_snapshot(const dura_meter_snapshot_t *snapshot) {}
 void dura_board_note_user_activity(void) { ++activity_calls; }
 esp_err_t dura_meter_set_screen_home(void) { ++home_calls; return ESP_OK; }
+esp_err_t dura_meter_start_batch_mode(float amount, dura_operation_mode_t mode) { ++start_calls; return ESP_OK; }
 esp_err_t dura_meter_set_output_handler(dura_meter_output_handler_t handler)
 {
     installed_output_handler = handler;
@@ -119,26 +121,28 @@ static void check_recirc_behavior(int pin, int active)
     s_ui_screen = DURA_UI_MAIN_MENU;
     s_ui_batch_amount = 0;
     home_calls = activity_calls = 0;
+    start_calls = 0;
     levels[pin] = !active;
     production_recirc_tick();
     CHECK("Recirc idle does not open menu", home_calls, 0);
     CHECK("Recirc idle keeps Main Menu", s_ui_screen, DURA_UI_MAIN_MENU);
     levels[pin] = active;
     production_recirc_tick();
-    CHECK("Recirc press opens editor", s_ui_screen, DURA_UI_RECIRC_EDIT);
-    CHECK("Recirc press resets meter home once", home_calls, 1);
+    CHECK("Recirc press starts remembered batch", s_ui_screen, DURA_UI_RECIRC_RUN);
+    CHECK("Recirc press does not reset meter home", home_calls, 0);
+    CHECK("Recirc press starts once", start_calls, 1);
     CHECK("Recirc accepted activity once", activity_calls, 1);
     CHECK("Recirc default batch retained", (int)s_ui_batch_amount, 250);
     CHECK("Recirc reads assigned input", reads[pin], 2);
     s_ui_screen = DURA_UI_MAIN_MENU;
     production_recirc_tick();
-    CHECK("Recirc held input does not retrigger", home_calls, 1);
+    CHECK("Recirc held input does not retrigger", start_calls, 1);
     CHECK("Recirc held input keeps menu", s_ui_screen, DURA_UI_MAIN_MENU);
     levels[pin] = !active;
     production_recirc_tick();
     levels[pin] = active;
     production_recirc_tick();
-    CHECK("Recirc release/repress retriggers", home_calls, 2);
+    CHECK("Recirc release/repress retriggers", start_calls, 2);
     /* HOME aliases MAIN_MENU; use every actual non-menu state instead. */
     for (int screen = DURA_UI_MANUAL; screen < DURA_UI_SCREEN_COUNT; ++screen) {
         levels[pin] = !active;
@@ -146,7 +150,7 @@ static void check_recirc_behavior(int pin, int active)
         s_ui_screen = screen;
         levels[pin] = active;
         production_recirc_tick();
-        CHECK("Recirc outside Main Menu rejected", home_calls, 2);
+        CHECK("Recirc outside Main Menu rejected", start_calls, 2);
         CHECK("Recirc outside Main Menu keeps screen", s_ui_screen, screen);
     }
 }
