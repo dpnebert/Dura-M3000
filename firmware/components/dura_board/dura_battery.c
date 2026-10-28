@@ -22,6 +22,11 @@ static adc_channel_t s_adc_channel;
 static bool s_initialized;
 static int64_t s_ready_at_us;
 static int64_t s_next_sample_at_us;
+/* Successful calibrated pad mV only; errors and repeated init retain history. */
+static uint32_t s_pad_mv_history[DURA_BATTERY_AVERAGE_SAMPLES];
+static uint32_t s_history_count;
+static uint32_t s_history_next;
+static uint64_t s_pad_mv_sum; /* Holds 16 nonnegative int samples without overflow. */
 
 static void set_unavailable(void)
 {
@@ -87,7 +92,7 @@ esp_err_t dura_battery_init(void)
     s_ready_at_us = esp_timer_get_time() + ((int64_t)DURA_BATTERY_ADC_WAKE_SETTLE_MS * 1000);
     s_next_sample_at_us = s_ready_at_us;
     ESP_LOGI(TAG,
-             "battery ADC ready: gpio=%d unit=ADC1 channel=0 attenuation=12dB discard=%u average=%u period_ms=%u",
+             "battery ADC ready: gpio=%d unit=ADC1 channel=0 attenuation=12dB discard=%u rolling_window=%u new_samples=1 period_ms=%u",
              (int)DURA_GPIO_BATTERY_ADC, DURA_BATTERY_DISCARD_SAMPLES,
              DURA_BATTERY_AVERAGE_SAMPLES, DURA_BATTERY_SAMPLE_PERIOD_MS);
     return ESP_OK;
@@ -112,20 +117,26 @@ void dura_battery_poll(void)
         }
     }
 
-    uint64_t pad_mv_sum = 0u;
-    for (uint32_t i = 0; i < DURA_BATTERY_AVERAGE_SAMPLES; ++i) {
-        int pad_mv;
-        esp_err_t err = adc_oneshot_read(s_adc_unit, s_adc_channel, &raw);
-        if (err == ESP_OK) err = adc_cali_raw_to_voltage(s_adc_cali, raw, &pad_mv);
-        if (err != ESP_OK || pad_mv < 0) {
-            set_unavailable();
-            ESP_LOGW(TAG, "battery ADC calibrated read failed; measurement unavailable");
-            return;
-        }
-        pad_mv_sum += (uint32_t)pad_mv;
+    int pad_mv;
+    esp_err_t err = adc_oneshot_read(s_adc_unit, s_adc_channel, &raw);
+    if (err == ESP_OK) err = adc_cali_raw_to_voltage(s_adc_cali, raw, &pad_mv);
+    if (err != ESP_OK || pad_mv < 0) {
+        set_unavailable();
+        ESP_LOGW(TAG, "battery ADC calibrated read failed; measurement unavailable");
+        return;
     }
 
-    const uint32_t average_pad_mv = (uint32_t)(pad_mv_sum / DURA_BATTERY_AVERAGE_SAMPLES);
+    /* Commit one sample only after successful acquisition and calibration. */
+    if (s_history_count == DURA_BATTERY_AVERAGE_SAMPLES) {
+        s_pad_mv_sum -= s_pad_mv_history[s_history_next];
+    } else {
+        ++s_history_count;
+    }
+    s_pad_mv_history[s_history_next] = (uint32_t)pad_mv;
+    s_pad_mv_sum += (uint32_t)pad_mv;
+    s_history_next = (s_history_next + 1u) % DURA_BATTERY_AVERAGE_SAMPLES;
+
+    const uint32_t average_pad_mv = (uint32_t)(s_pad_mv_sum / s_history_count);
     const uint32_t battery_mv = dura_battery_apply_divider_mv(average_pad_mv);
     s_measurement.valid = true;
     s_measurement.millivolts = battery_mv;

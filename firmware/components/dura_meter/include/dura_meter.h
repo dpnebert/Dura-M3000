@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "dura_control_policy.h"
+#include "dura_quick_cal.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -146,9 +147,15 @@ esp_err_t dura_meter_finish_calibration(uint8_t profile_index);
 esp_err_t dura_meter_prepare_for_sleep(void);
 esp_err_t dura_meter_cancel_sleep_prepare(void);
 esp_err_t dura_meter_record_pulse(uint32_t count);
+/* Board-ingress leaf ONLY: caller is the registered flow handler, holding both
+ * meter and ingress locks. Does not count volume, lock, save, or publish outputs.
+ * Pass one timestamp per qualified edge in FIFO order, never from an ISR.
+ * The count-only record_pulse API cannot reconstruct timing and adds no samples. */
+void dura_meter_ingest_flow_timestamp_locked(int64_t timestamp_us);
 /* Task-only board ingress boundary. enter=true locks ingress and returns all
  * qualified pre-boundary pulses; enter=false releases ingress. No blocking,
- * allocation, NVS, logging or meter re-entry is permitted in this callback. */
+ * allocation, NVS, logging or meter re-entry is permitted in this callback,
+ * except the timestamp-ingestion leaf above before returning the total count. */
 typedef uint32_t (*dura_meter_flow_handler_t)(bool enter);
 esp_err_t dura_meter_set_flow_handler(dura_meter_flow_handler_t handler);
 /* Drain atomically with meter transitions; returns activity since last poll. */

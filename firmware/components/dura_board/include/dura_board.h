@@ -312,6 +312,9 @@ bool dura_board_ext_power_present(void);
 const char *dura_board_power_source_name(void);
 esp_err_t dura_board_set_boost_enabled(bool enabled);
 bool dura_board_boost_enabled(void);
+/* Internal ingress drain: only flow_boundary may call this while holding both
+ * the meter lock and board ingress boundary. Ingests each qualified timestamp
+ * before returning the aggregate volume count. Never call directly/from ISR. */
 uint32_t dura_board_take_flow_pulses(void);
 dura_button_t dura_board_poll_button(void);
 uint64_t dura_board_button_wake_mask(void);

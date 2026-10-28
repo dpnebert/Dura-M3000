@@ -59,7 +59,12 @@ typedef struct {
     bool reset_to_zero;
     uint8_t selected_precal_profile;
     uint8_t quick_cal_reference;
-    int64_t last_pulse_us;
+    int64_t last_flow_tick;
+    int64_t next_flow_update_us;
+    uint16_t flow_fir[31];
+    uint16_t flow_delta[40];
+    uint8_t flow_index;
+    uint8_t flow_samples;
     float flow_rate;
 } dura_meter_state_t;
 
@@ -76,6 +81,7 @@ static uint64_t s_control_epoch;
 static bool s_calibration_save_in_progress;
 static void sync_outputs_locked(void);
 static bool record_pulse_locked(uint32_t count);
+static void advance_flow_locked(int64_t now_us);
 static dura_meter_flow_handler_t s_flow_handler;
 static uint32_t s_flow_activity;
 static bool s_flow_save_pending;
@@ -85,10 +91,13 @@ static bool s_flow_save_pending;
  * No transition can overtake an already queued edge, nor split a drained batch. */
 static void begin_flow_locked(void)
 {
-    if (s_flow_handler == NULL) return;
-    const uint32_t count = s_flow_handler(true);
-    s_flow_activity = count > UINT32_MAX - s_flow_activity ? UINT32_MAX : s_flow_activity + count;
-    if (record_pulse_locked(count)) s_flow_save_pending = true;
+    if (s_flow_handler != NULL) {
+        const uint32_t count = s_flow_handler(true);
+        s_flow_activity = count > UINT32_MAX - s_flow_activity ? UINT32_MAX : s_flow_activity + count;
+        if (record_pulse_locked(count)) s_flow_save_pending = true;
+    }
+    /* Also serviced by the board's regular drain with no events or BLE reads. */
+    advance_flow_locked(esp_timer_get_time());
 }
 
 #define METER_LOCK() do { taskENTER_CRITICAL(&s_meter_lock); begin_flow_locked(); } while (0)
@@ -216,12 +225,15 @@ static dura_meter_state_t default_state(void)
     state.meter_timeout_sec = DURA_METER_TIMEOUT_MIN_SEC;
     state.backlight_timeout_sec = DURA_BACKLIGHT_TIMEOUT_MIN_SEC;
     state.selected_precal_profile = 0;
-    state.quick_cal_reference = 17; /* Water 66 F in the legacy 1..21 list. */
+    state.quick_cal_reference = DURA_QUICK_CAL_DEFAULT;
     state.screen = DURA_SCREEN_HOME;
     state.batch_mode = DURA_BATCH_IDLE;
     state.calibration_mode = DURA_CAL_IDLE;
     state.operation_mode = DURA_OPERATION_IDLE;
     state.pump_enabled = false;
+    const int64_t now_us = esp_timer_get_time();
+    state.last_flow_tick = now_us / 1000;
+    state.next_flow_update_us = now_us + 100000;
     return state;
 }
 
@@ -259,12 +271,19 @@ static float selected_amount_to_gal(float amount)
 static uint32_t amount_to_counts(float amount)
 {
     const float coef = selected_coef();
-    const double counts = (double)amount / (double)coef;
-    if (!isfinite(amount) || amount <= 0.0f || !coefficient_valid(coef) ||
-        !isfinite(counts) || counts > (double)UINT32_MAX - 0.5) {
+    if (!isfinite(amount) || amount <= 0.0f || !coefficient_valid(coef)) {
         return 0;
     }
-    return (uint32_t)(counts + 0.5);
+    /* Retained ARM code rounds the quotient to binary32, THEN truncates it.
+     * Do not divide in double or round fractional counts up to a pulse. */
+    volatile float counts = amount / coef;
+    /* The port's counters/NVS are uint32_t, wider than legacy signed longint.
+     * Keep that safe extension without reproducing signed overflow. 2^32 is
+     * exactly representable; (float)UINT32_MAX rounds UP to this same bound. */
+    if (!isfinite(counts) || counts < 1.0f || counts >= 0x1p32f) {
+        return 0;
+    }
+    return (uint32_t)counts;
 }
 
 static float batch_remaining_display_value(float requested_amount,
@@ -301,8 +320,10 @@ static esp_err_t set_pump_locked(bool enabled)
 
 esp_err_t dura_meter_factory_defaults(void)
 {
-    const dura_meter_state_t defaults = default_state();
+    dura_meter_state_t defaults = default_state();
     METER_LOCK();
+    /* Lifetime history survives an operator reset, including drained flow. */
+    defaults.odometer_counts = s_meter.odometer_counts;
     s_meter = defaults;
     ++s_control_epoch;
     METER_UNLOCK();
@@ -382,8 +403,18 @@ static esp_err_t load_meter_state(uint64_t epoch)
     if (err == ESP_OK) loaded.selected_precal_profile = u8_value;
     else if (err != ESP_ERR_NVS_NOT_FOUND) invalid = true;
     u8_value = loaded.quick_cal_reference;
-    err = nvs_get_u8(nvs, "quick_ref", &u8_value);
+    err = nvs_get_u8(nvs, DURA_QUICK_CAL_NVS_KEY, &u8_value);
     if (err == ESP_OK) loaded.quick_cal_reference = u8_value;
+    else if (err == ESP_ERR_NVS_NOT_FOUND) {
+        /* Legacy refs 1..20 mean .84..1.03, now rows 20..1. Old21's
+         * 1.04 has no row: retain a neutral editor identity. Never touch
+         * saved or working coefficient bytes during this migration. */
+        err = nvs_get_u8(nvs, "quick_ref", &u8_value);
+        if (err == ESP_OK) {
+            if (u8_value < 1 || u8_value > 21) invalid = true;
+            else loaded.quick_cal_reference = (uint8_t)(21u - u8_value);
+        } else if (err != ESP_ERR_NVS_NOT_FOUND) invalid = true;
+    }
     else if (err != ESP_ERR_NVS_NOT_FOUND) invalid = true;
 
     size_t profiles_len = sizeof(loaded.precal_profiles);
@@ -416,7 +447,6 @@ static esp_err_t load_meter_state(uint64_t epoch)
                   loaded.backlight_timeout_sec <= DURA_BACKLIGHT_TIMEOUT_MAX_SEC)) ||
                loaded.selected_language > DURA_LANGUAGE_SPANISH ||
                loaded.selected_precal_profile >= DURA_PRECAL_PROFILE_COUNT ||
-               loaded.quick_cal_reference < DURA_QUICK_CAL_REFERENCE_MIN ||
                loaded.quick_cal_reference > DURA_QUICK_CAL_REFERENCE_MAX;
     for (uint8_t i = 0; i < DURA_PRECAL_PROFILE_COUNT; ++i) {
         invalid |= !coefficients_empty(&loaded.precal_profiles[i]) &&
@@ -489,7 +519,7 @@ static esp_err_t save_meter_state(const dura_meter_state_t *saved)
     if (err == ESP_OK) err = nvs_set_u8(nvs, "backlight", saved->backlight_timeout_sec);
     if (err == ESP_OK) err = nvs_set_u8(nvs, "language", (uint8_t)saved->selected_language);
     if (err == ESP_OK) err = nvs_set_u8(nvs, "precal_sel", saved->selected_precal_profile);
-    if (err == ESP_OK) err = nvs_set_u8(nvs, "quick_ref", saved->quick_cal_reference);
+    if (err == ESP_OK) err = nvs_set_u8(nvs, DURA_QUICK_CAL_NVS_KEY, saved->quick_cal_reference);
     if (err == ESP_OK) err = nvs_set_blob(nvs, "precal", saved->precal_profiles, sizeof(saved->precal_profiles));
     if (err == ESP_OK) err = nvs_set_blob(nvs, "batch_gal", &saved->batch_preset_gal, sizeof(float));
     if (err == ESP_OK) err = nvs_set_blob(nvs, "coef_gal", &saved->working_coef_gal, sizeof(float));
@@ -514,12 +544,13 @@ esp_err_t dura_meter_save(void)
     return err;
 }
 
-/* quick_reference == 0 selects the measured/bucket profile-save path.
+/* quick_reference == 0 selects a profile save/recall; finish_collection is
+ * true only for the measured/bucket path, not an idle PreCal operation.
  * The reservation is acquired by the caller under s_meter_lock. Keep it through
  * the save-mutex wait, NVS, and publication, even if a safety action cancels us. */
 static esp_err_t save_calibration(const dura_cal_coefficients_t *calibrated,
                                   uint8_t profile_index, uint8_t quick_reference,
-                                  uint64_t epoch)
+                                  bool finish_collection, uint64_t epoch)
 {
     if (s_save_mutex == NULL || xSemaphoreTake(s_save_mutex, portMAX_DELAY) != pdTRUE) {
         METER_LOCK();
@@ -559,14 +590,17 @@ static esp_err_t save_calibration(const dura_cal_coefficients_t *calibrated,
         } else {
             s_meter.precal_profiles[profile_index] = *calibrated;
             s_meter.selected_precal_profile = profile_index;
-            memset(&s_meter.pending_calibration, 0, sizeof(s_meter.pending_calibration));
-            s_meter.calibration_mode = DURA_CAL_IDLE;
-            s_meter.screen = DURA_SCREEN_HOME;
-            s_meter.operation_mode = DURA_OPERATION_IDLE;
+            if (finish_collection) {
+                memset(&s_meter.pending_calibration, 0, sizeof(s_meter.pending_calibration));
+                s_meter.calibration_mode = DURA_CAL_IDLE;
+                s_meter.screen = DURA_SCREEN_HOME;
+                s_meter.operation_mode = DURA_OPERATION_IDLE;
+            }
         }
     }
-    /* Failure retains the measured WAIT_SAVE or Quick pending session. Only
-     * the in-flight writer reservation ends here; retry ownership survives. */
+    /* Failure retains the measured WAIT_SAVE or Quick pending session. Idle
+     * PreCal leaves its old coefficients/selection unchanged and may retry.
+     * Only the in-flight writer reservation ends here. */
     s_calibration_save_in_progress = false;
     METER_UNLOCK();
     xSemaphoreGive(s_save_mutex);
@@ -1067,7 +1101,7 @@ esp_err_t dura_meter_finish_calibration(uint8_t profile_index)
     s_calibration_save_in_progress = true;
     const uint64_t epoch = s_control_epoch;
     METER_UNLOCK();
-    return save_calibration(&calibrated, profile_index, 0, epoch);
+    return save_calibration(&calibrated, profile_index, 0, true, epoch);
 }
 
 esp_err_t dura_meter_prepare_for_sleep(void)
@@ -1107,20 +1141,97 @@ esp_err_t dura_meter_cancel_sleep_prepare(void)
     return ESP_OK;
 }
 
+/* Release_1_1_3: enabled 31-tap integer FIR /524288; 40-slot trimmed average,
+ * min 5 samples; 80/20 blend; 1500-tick timeout. The 1ms tick corresponds to
+ * TIM2 at 8MHz, PSC=0, ARR=7999 and the source's 0.001 conversion, not its
+ * conflicting 100us comment or compiler Clock metadata.
+ * Port adaptation: fixed 100ms logical blend cadence in every mode, independent
+ * of snapshot frequency. Replay this timeline around queued pulse timestamps.
+ * Preserve legacy selected-unit scalar across unit/coefficient changes; only
+ * the next blend applies the newly selected coefficient to its new term. */
+static void clear_flow_delta_locked(void)
+{
+    memset(s_meter.flow_delta, 0, sizeof(s_meter.flow_delta));
+    s_meter.flow_samples = 0;
+    s_meter.flow_rate = 0.0f;
+    /* Legacy clearDeltaFlow deliberately retains FIR history AND ring index. */
+}
+
+static void advance_flow_locked(int64_t now_us)
+{
+    if (now_us < 0) return;
+    if (now_us / 1000 - s_meter.last_flow_tick >= 1500) {
+        clear_flow_delta_locked();
+        /* Skip idle time in O(1); no unbounded catch-up after sleep/long gaps. */
+        if (s_meter.next_flow_update_us <= now_us) {
+            s_meter.next_flow_update_us +=
+                ((now_us - s_meter.next_flow_update_us) / 100000 + 1) * 100000;
+        }
+        return;
+    }
+    while (s_meter.next_flow_update_us <= now_us) {
+        float hertz = 0.0f;
+        if (s_meter.flow_samples >= 5) {
+            uint32_t sum = 0;
+            uint16_t low = UINT16_MAX, high = 0;
+            /* Preserve legacy prefix scan, including its post-clear behavior. */
+            for (unsigned i = 0; i < s_meter.flow_samples; ++i) {
+                const uint16_t value = s_meter.flow_delta[i];
+                sum += value;
+                if (value < low) low = value;
+                if (value > high) high = value;
+            }
+            const float average = (float)(sum - low - high) /
+                                  (float)(s_meter.flow_samples - 2);
+            if (average > 0.0f) hertz = 1.0f / (0.001f * average);
+        }
+        /* Separate binary32 steps match the verified listing's operation order.
+         * Volatile temporaries prevent fusion/reassociation across these steps.
+         * Compiled (1.00f - .80f) is 0x3e4ccccc, NOT the literal .20f. */
+        volatile float old_rate = s_meter.flow_rate * (1.00f - 0.80f);
+        volatile float new_rate = hertz * 60.0f;
+        new_rate = new_rate * selected_coef();
+        new_rate = 0.80f * new_rate;
+        s_meter.flow_rate = old_rate + new_rate;
+        s_meter.next_flow_update_us += 100000;
+    }
+}
+
+void dura_meter_ingest_flow_timestamp_locked(int64_t timestamp_us)
+{
+    static const uint16_t coefficients[31] = {
+        14750,15149,15531,15893,16235,16555,16851,17121,
+        17364,17578,17762,17915,18035,18123,18177,18198,
+        18177,18123,18035,17915,17762,17578,17364,17121,
+        16851,16555,16235,15893,15531,15149,14750
+    };
+    if (timestamp_us < 0) return;
+    advance_flow_locked(timestamp_us - 1);
+    if (s_meter.screen == DURA_SCREEN_CALIBRATION &&
+        s_meter.calibration_mode == DURA_CAL_RUNNING) return;
+    const int64_t tick = timestamp_us / 1000;
+    if (tick < s_meter.last_flow_tick) return;
+    int64_t delta = tick - s_meter.last_flow_tick;
+    if (delta >= 1500) {
+        clear_flow_delta_locked();
+        delta = 1500;
+    }
+    for (unsigned i = 30; i > 0; --i) s_meter.flow_fir[i] = s_meter.flow_fir[i - 1];
+    s_meter.flow_fir[0] = (uint16_t)delta;
+    uint32_t sum = 0; /* 1500 * sum(coefficients) fits signed 32 legacy accumulator. */
+    for (unsigned i = 0; i < 31; ++i) sum += (uint32_t)coefficients[i] * s_meter.flow_fir[i];
+    s_meter.flow_delta[s_meter.flow_index] = (uint16_t)(sum / 524288U);
+    s_meter.flow_index = (s_meter.flow_index + 1) % 40;
+    if (s_meter.flow_samples < 40) ++s_meter.flow_samples;
+    s_meter.last_flow_tick = tick;
+}
+
 static bool record_pulse_locked(uint32_t count)
 {
     if (count == 0) {
         return false;
     }
-    int64_t now_us = esp_timer_get_time();
     bool batch_done = false;
-    if (s_meter.last_pulse_us > 0 && now_us > s_meter.last_pulse_us) {
-        float seconds = (float)(now_us - s_meter.last_pulse_us) / 1000000.0f;
-        if (seconds > 0.0f) {
-            s_meter.flow_rate = (selected_coef() * 60.0f * (float)count) / seconds;
-        }
-    }
-    s_meter.last_pulse_us = now_us;
 
     if (s_meter.screen == DURA_SCREEN_CALIBRATION && s_meter.calibration_mode == DURA_CAL_RUNNING) {
         s_meter.calibration_counts = (count > UINT32_MAX - s_meter.calibration_counts) ?
@@ -1224,10 +1335,10 @@ esp_err_t dura_meter_select_precal_profile(uint8_t profile_index)
         return ESP_ERR_NOT_FOUND;
     }
     const dura_cal_coefficients_t selected = s_meter.precal_profiles[profile_index];
-    set_working_coefficients_locked(&selected);
-    s_meter.selected_precal_profile = profile_index;
+    s_calibration_save_in_progress = true;
+    const uint64_t epoch = s_control_epoch;
     METER_UNLOCK();
-    return dura_meter_save();
+    return save_calibration(&selected, profile_index, 0, false, epoch);
 }
 
 esp_err_t dura_meter_store_working_precal_profile(uint8_t profile_index)
@@ -1243,10 +1354,10 @@ esp_err_t dura_meter_store_working_precal_profile(uint8_t profile_index)
         METER_UNLOCK();
         return ESP_ERR_INVALID_STATE;
     }
-    s_meter.precal_profiles[profile_index] = working;
-    s_meter.selected_precal_profile = profile_index;
+    s_calibration_save_in_progress = true;
+    const uint64_t epoch = s_control_epoch;
     METER_UNLOCK();
-    return dura_meter_save();
+    return save_calibration(&working, profile_index, 0, false, epoch);
 }
 
 esp_err_t dura_meter_apply_quick_cal(uint8_t reference)
@@ -1265,9 +1376,7 @@ esp_err_t dura_meter_apply_quick_cal(uint8_t reference)
         METER_UNLOCK();
         return ESP_ERR_INVALID_STATE;
     }
-    /* Configuration.mbas FluidList indices 2..22 map to references 21..1
-     * and factors 1.04..0.84. Quick Cal scales the saved water profile. */
-    const float factor = 0.83f + (0.01f * (float)reference);
+    const float factor = dura_quick_cal_entry(reference)->water_factor;
     const dura_cal_coefficients_t *water = &s_meter.precal_profiles[0];
     if (!coefficients_valid(water)) {
         METER_UNLOCK();
@@ -1283,7 +1392,7 @@ esp_err_t dura_meter_apply_quick_cal(uint8_t reference)
     s_calibration_save_in_progress = true;
     const uint64_t epoch = s_control_epoch;
     METER_UNLOCK();
-    return save_calibration(&quick, 0, reference, epoch);
+    return save_calibration(&quick, 0, reference, false, epoch);
 }
 
 esp_err_t dura_meter_set_show_flow_rate(bool enabled)
@@ -1329,6 +1438,7 @@ esp_err_t dura_meter_reset_batch_total(void)
 {
     METER_LOCK();
     s_meter.batch_total_counts = 0;
+    s_meter.meter_total_counts = 0;
     METER_UNLOCK();
     return dura_meter_save();
 }
@@ -1337,6 +1447,7 @@ esp_err_t dura_meter_reset_total_total(void)
 {
     METER_LOCK();
     s_meter.total_total_counts = 0;
+    s_meter.meter_total_counts = 0;
     METER_UNLOCK();
     return dura_meter_save();
 }

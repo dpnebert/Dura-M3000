@@ -21,8 +21,9 @@ config DURA_BOARD_VOLUME_GALLON_DECIMALS
     help
         Decimal places for gallon quantities in Manual, Auto and Recirc edit/run
         displays. Independent of liter and ounce settings. Above the shared
-        cutoff at most one decimal is shown; zero remains zero. Display only:
-        metering/storage precision, edit rounding and run truncation are unchanged.
+        cutoff at most one decimal is shown; zero remains zero. These controls also
+        set Auto/Recirc entry steps (0: 1, 1: 0.1, 2: 0.01 selected unit).
+        Metering/storage precision and display rounding/truncation are unchanged.
 
 config DURA_BOARD_VOLUME_LITER_DECIMALS
     int "Liter quantity decimal places"
@@ -31,8 +32,9 @@ config DURA_BOARD_VOLUME_LITER_DECIMALS
     help
         Decimal places for liter quantities in Manual, Auto and Recirc edit/run
         displays. Independent of gallon and ounce settings. Above the shared
-        cutoff at most one decimal is shown; zero remains zero. Display only:
-        metering/storage precision, edit rounding and run truncation are unchanged.
+        cutoff at most one decimal is shown; zero remains zero. These controls also
+        set Auto/Recirc entry steps (0: 1, 1: 0.1, 2: 0.01 selected unit).
+        Metering/storage precision and display rounding/truncation are unchanged.
 
 config DURA_BOARD_VOLUME_OUNCE_DECIMALS
     int "Ounce quantity decimal places"
@@ -41,8 +43,9 @@ config DURA_BOARD_VOLUME_OUNCE_DECIMALS
     help
         Decimal places for ounce quantities in Manual, Auto and Recirc edit/run
         displays. Independent of gallon and liter settings. Above the shared
-        cutoff at most one decimal is shown; zero remains zero. Display only:
-        metering/storage precision, edit rounding and run truncation are unchanged.
+        cutoff at most one decimal is shown; zero remains zero. These controls also
+        set Auto/Recirc entry steps (0: 1, 1: 0.1, 2: 0.01 selected unit).
+        Metering/storage precision and display rounding/truncation are unchanged.
 
 config DURA_BOARD_VOLUME_2DP_LIMIT_TENTHS
     int "Two-decimal quantity cutoff (tenths of selected volume unit)"
@@ -171,7 +174,8 @@ config DURA_BOARD_ENABLE_RECIRC_INPUT
         Enables the separate Recirc button, enabled by the full-function
         PCB832 revX3 profile. Its external divider is active-high; disable
         internal pulls. GPIO35 is polled while awake, not an EXT1 wake source.
-        A press opens Recirc only while the Main Menu is displayed.
+        A press starts the remembered Recirc quantity only from an idle Main Menu,
+        through the normal protected start path.
 
 config DURA_BOARD_GPIO_RECIRC_INPUT
     int "Separate Recirc push-button GPIO"

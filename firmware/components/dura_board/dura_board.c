@@ -162,8 +162,9 @@ static const dura_flow_def_t s_flow_inputs[] = {
 };
 
 typedef struct {
-    uint8_t source; /* 1 = reed A, 2 = reed B */
-    uint8_t levels; /* bit 0 = reed A, bit 1 = reed B */
+    uint8_t source;
+    uint8_t levels;
+    int64_t timestamp_us;
 } dura_flow_event_t;
 
 static uint8_t s_last_valid_reed;
@@ -299,6 +300,7 @@ static void IRAM_ATTR flow_isr(void *arg)
     portENTER_CRITICAL_ISR(&s_flow_boundary_mux);
     const dura_flow_event_t event = {
         .source = (uint8_t)(uintptr_t)arg,
+        .timestamp_us = esp_timer_get_time(),
         .levels = (uint8_t)((gpio_get_level(DURA_GPIO_FLOW_A) ? 1u : 0u) |
                            (gpio_get_level(DURA_GPIO_FLOW_B) ? 2u : 0u)),
     };
@@ -326,6 +328,9 @@ uint32_t dura_board_take_flow_pulses(void)
     dura_flow_event_t event;
     while (s_flow_event_queue != NULL && xQueueReceive(s_flow_event_queue, &event, 0) == pdTRUE) {
         if (flow_event_counts(&event)) {
+            /* Meter lock + ingress boundary are held. Rate uses each edge's
+             * capture time, never the queue-drain time or aggregated count. */
+            dura_meter_ingest_flow_timestamp_locked(event.timestamp_us);
             portENTER_CRITICAL(&s_flow_mux);
             if (s_flow_pulses != UINT32_MAX) s_flow_pulses++;
             portEXIT_CRITICAL(&s_flow_mux);
@@ -736,6 +741,8 @@ typedef enum {
     DURA_UI_AUTO_BATCH_RUN,
     DURA_UI_BATCH_COMPLETE,
     DURA_UI_FLOW_ERROR,
+    DURA_UI_SETUP_HELP,
+    DURA_UI_INFO_SCAN,
     DURA_UI_SCREEN_COUNT,
 } dura_ui_screen_t;
 
@@ -745,9 +752,19 @@ RTC_DATA_ATTR static uint8_t s_ui_reset_item;
 RTC_DATA_ATTR static uint8_t s_ui_help_page;
 RTC_DATA_ATTR static uint8_t s_ui_info_page;
 RTC_DATA_ATTR static float s_ui_batch_amount = DURA_AUTO_BATCH_DEFAULT_GAL;
+/* Transient owner-task dispatch context; never retained across sleep. */
+static bool s_ui_repeat_dispatch;
+/* UI-only retained presets: cold boot defaults, deep sleep continuity, no NVS policy. */
+RTC_DATA_ATTR static float s_ui_auto_amount_gal = DURA_AUTO_BATCH_DEFAULT_GAL;
+RTC_DATA_ATTR static float s_ui_recirc_amount_gal = DURA_RECIRC_BATCH_DEFAULT_GAL;
+RTC_DATA_ATTR static bool s_ui_batch_is_recirc;
+RTC_DATA_ATTR static dura_units_t s_ui_batch_units = DURA_UNITS_GALLON;
 RTC_DATA_ATTR static float s_ui_cal_measured_amount;
 RTC_DATA_ATTR static bool s_ui_cal_measured_amount_valid;
-RTC_DATA_ATTR static uint8_t s_ui_quick_ref = 17u;
+RTC_DATA_ATTR static uint8_t s_ui_quick_ref = DURA_QUICK_CAL_DEFAULT;
+/* Transient, non-modal feedback; never retained across deep sleep. */
+static char s_ui_notice_line1[32], s_ui_notice_line2[32];
+static int64_t s_ui_notice_until_us;
 static bool s_low_battery_blink_active;
 static int64_t s_low_battery_blink_epoch_ms;
 
@@ -791,6 +808,8 @@ static void ui_legacy_ids(uint16_t *screen_id, uint16_t *menu_id)
     case DURA_UI_RECIRC_EDIT: *screen_id = DURA_UI_LEGACY_SCREEN_BATCH; *menu_id = DURA_UI_LEGACY_MENU_BATCH_SET; break;
     case DURA_UI_RECIRC_RUN: *screen_id = DURA_UI_LEGACY_SCREEN_BATCH; *menu_id = DURA_UI_LEGACY_MENU_BATCH_RUN; break;
     case DURA_UI_SETUP: *menu_id = s_ui_setup_item; break;
+    case DURA_UI_SETUP_HELP: *menu_id = s_ui_setup_item == 53u ? 54u : s_ui_setup_item + 2u; break;
+    case DURA_UI_INFO_SCAN: *screen_id = DURA_UI_LEGACY_SCREEN_SCAN; *menu_id = DURA_UI_LEGACY_MENU_INFO_START; break;
     case DURA_UI_RESET_TOTALS:
     case DURA_UI_RESET_HELP: *menu_id = DURA_UI_LEGACY_MENU_METER_RESET + s_ui_reset_item; break;
     case DURA_UI_INFO_START: *screen_id = DURA_UI_LEGACY_SCREEN_INFO; *menu_id = DURA_UI_LEGACY_MENU_INFO_START; break;
@@ -1104,16 +1123,6 @@ static void draw_legacy_home(const dura_meter_snapshot_t *meter)
     draw_legacy_buttons("Man", "Calibr", "Recirc", "Auto");
 }
 
-static const char *language_label(dura_language_t language)
-{
-    switch (language) {
-    case DURA_LANGUAGE_PORTUGUESE: return "Portuguese";
-    case DURA_LANGUAGE_SPANISH: return "Spanish";
-    case DURA_LANGUAGE_ENGLISH:
-    default: return "English";
-    }
-}
-
 static void render_setup(const dura_meter_snapshot_t *meter)
 {
     char value[32];
@@ -1144,10 +1153,7 @@ static void render_setup(const dura_meter_snapshot_t *meter)
         draw_legacy_menu_screen("Show Auto", "Batch Mode", NULL, NULL, NULL, "Home", "Yes", "No", "Next");
         draw_legacy_value_box(meter->show_auto_batch ? "Yes" : "No");
         break;
-    case 7:
-        draw_legacy_menu_screen("Language", "Select", NULL, NULL, NULL, "EN", "PT", "SP", "Next");
-        draw_legacy_value_box(language_label(meter->selected_language));
-        break;
+    case 7: /* Retained old RTC screen number: English-only UI skips it. */
     case 8:
         draw_legacy_menu_screen("Reset Meter?", "Factory", "defaults", NULL, NULL, "Home", "Yes", NULL, "Next");
         break;
@@ -1192,25 +1198,32 @@ static void render_reset_totals(const dura_meter_snapshot_t *meter)
 static void render_reset_help(void)
 {
     if (s_ui_reset_item == 0u) {
-        draw_legacy_menu_screen("Meter reset", "clears current", "amount only", NULL, NULL, "Back", NULL, NULL, NULL);
+        draw_legacy_menu_screen("The Amount Metered", "can be reset to 0.00 by", "pressing the button labeled", "'Reset'.", NULL, "Back", NULL, NULL, NULL);
     } else if (s_ui_reset_item == 1u) {
-        draw_legacy_menu_screen("Batch reset", "clears batch", "total only", NULL, NULL, "Back", NULL, NULL, NULL);
+        draw_legacy_menu_screen("The Batch and Amount", "Metered will be reset to 0.00", "by pressing the button", "labeled 'Reset'", NULL, "Back", NULL, NULL, NULL);
     } else {
-        draw_legacy_menu_screen("Total reset", "clears total", "counter only", NULL, NULL, "Back", NULL, NULL, NULL);
+        draw_legacy_menu_screen("The Total and Amount", "Metered will be reset to 0.00", "by pressing the button", "labeled 'Reset'", NULL, "Back", NULL, NULL, NULL);
     }
+}
+
+static void render_setup_help(void)
+{
+    draw_legacy_menu_screen(NULL, "Call Dura Products @", "317-984-4003 or visit",
+                            "www.DuraProducts.com", NULL, "Back", NULL, NULL, NULL);
 }
 
 static void render_info_help(void)
 {
     static const char *const pages[][5] = {
-        {"Meter Info", "Amount metered", "batch total", "and total", NULL},
-        {"Flow Info", "Flow rate shown", "when enabled", NULL, NULL},
-        {"Units", "Gallons liters", "or ounces", NULL, NULL},
-        {"Battery", "Power level", "shown at bottom", NULL, NULL},
-        {"Calibration", "Use Cal menu", "for bucket cal", NULL, NULL},
-        {"Batch", "Preset batch", "starts pump", NULL, NULL},
-        {"Support", "Contact Dura", "for service", NULL, NULL},
-        {"More Info", "Use More to", "cycle pages", NULL, NULL},
+        {"Welcome to Dura-Meter.", "This section contains info on", "features that did not have", "space for their own", " help button."},
+        {"Keep pressing the More button", "to read through all of the", "General Help.", NULL, NULL},
+        {"Button functions change on", "each screen. The new labels", "appear just above the physical", "buttons on the Meter Display.", NULL},
+        /* Approved Main Menu/GS settings gesture supersedes legacy face labels. */
+        {"There are four physical", "buttons on the meter body.", "Hold outside buttons", "for Program Settings.", NULL},
+        {"Reset:", "Allows you to reset the amount", " pumped, the Batch Amount and", "the Total Amount.", NULL},
+        {"Program Settings:", "your personal preferences:", "Meter timeout, backlight", "timeout and other settings", "can be changed here."},
+        {"Cal:", "Choose Quick Calibration or", "Manual Calibration. The 'Cal'", "section has its own help", "screens."},
+        {"Info: Company information,", "software version and General", "Help and Setting Help", "Screens.", NULL},
     };
     const uint8_t page = s_ui_info_page % 8u;
     draw_legacy_menu_screen(pages[page][0], pages[page][1], pages[page][2], pages[page][3], pages[page][4],
@@ -1236,7 +1249,10 @@ static void render_company(void)
 static void render_swv(const dura_meter_snapshot_t *meter)
 {
     char line[32];
-    snprintf(line, sizeof(line), "%.0f %s", (double)meter->total_total, unit_label(meter->selected_units));
+    const dura_cal_coefficients_t *c = &meter->working_coefficients;
+    const float coef = meter->selected_units == DURA_UNITS_LITER ? c->liter_per_count :
+                       meter->selected_units == DURA_UNITS_OUNCE ? c->ounce_per_count : c->gallon_per_count;
+    snprintf(line, sizeof(line), "%.0f %s", (double)meter->odometer_counts * coef, unit_label(meter->selected_units));
     draw_legacy_menu_screen("Version", DURA_METER_FIRMWARE_VERSION, line, CONFIG_DURA_BOARD_NAME, NULL,
                             "Home", NULL, "Help", "Battery");
 }
@@ -1267,18 +1283,41 @@ static void render_cal_start(void)
                             "Home", "Calibr", "PreCal", "Quick");
 }
 
+static void ui_show_notice(const char *line1, const char *line2)
+{
+    snprintf(s_ui_notice_line1, sizeof(s_ui_notice_line1), "%s", line1);
+    snprintf(s_ui_notice_line2, sizeof(s_ui_notice_line2), "%s", line2);
+    s_ui_notice_until_us = esp_timer_get_time() + 2500000;
+}
+
+static void render_ui_notice(void)
+{
+    if (esp_timer_get_time() >= s_ui_notice_until_us) return;
+    /* Keep all softkeys visible and live, particularly Cancel during flow. */
+    dura_lcd_fill_rect(1, 13, 126, 29, false);
+    dura_lcd_draw_rect(1, 13, 126, 29, true);
+    draw_legacy_text_aligned('C', 64, 15, s_ui_notice_line1, false);
+    draw_legacy_text_aligned('C', 64, 29, s_ui_notice_line2, false);
+}
+
 static void render_precal(const dura_meter_snapshot_t *meter, uint8_t page)
 {
     static const char *const names[DURA_PRECAL_PROFILE_COUNT] = {
         "Water", "Fluid1", "Fluid2", "Fluid3", "Fluid4", "Fluid5"
     };
     char current[24];
-    snprintf(current, sizeof(current), "Current %s", names[meter->selected_precal_profile]);
+    const bool saving = s_ui_screen == DURA_UI_CAL_SAVE_1 || s_ui_screen == DURA_UI_CAL_SAVE_2;
+    const uint8_t profile = meter->selected_precal_profile < DURA_PRECAL_PROFILE_COUNT ? meter->selected_precal_profile : 0u;
+    snprintf(current, sizeof(current), "Current %s", names[profile]);
     if (page == 0u) {
-        draw_legacy_menu_screen("PreCal", "Select fluid", current, NULL, NULL,
+        draw_legacy_menu_screen(saving ? "Choose a PreCal Number to" : "Recall calibration",
+                                saving ? "save your fluid calibration #" : "Choose a saved fluid",
+                                saving ? "for later use." : current, NULL, NULL,
                                 "Water", "Fluid1", "Fluid2", "Next");
     } else {
-        draw_legacy_menu_screen("PreCal", "Select fluid", current, NULL, NULL,
+        draw_legacy_menu_screen(saving ? "Choose a PreCal Number to" : "Recall calibration",
+                                saving ? "save your fluid calibration #" : "Choose a saved fluid",
+                                saving ? "for later use." : current, NULL, NULL,
                                 "Fluid3", "Fluid4", "Fluid5", "Cancel");
     }
 }
@@ -1317,31 +1356,35 @@ static void render_cal_bucket(const dura_meter_snapshot_t *meter, bool liters)
 
 static void render_cal_help(bool liters)
 {
-    static const char *const g_pages[][4] = {
-        {"Gal bucket cal", "Dispense into", "5 Gal bucket", NULL},
-        {"Start flow", "then press Cal", "to finish", NULL},
-        {"Adjust amount", "save to fluid", "slot", NULL},
-        {"Return", "goes back to", "bucket setup", NULL},
+    /* Retained English Language.mbas CALR* guidance. Physical accuracy limits
+     * remain reference guidance, not newly qualified measurements. */
+    static const char *const g_pages[][5] = {
+        {"'Calibr': Manually calibrate", "using from 2.5 to 7.5", "Gallons. Fill a calibrated", "container, adjust the meter", "to match, save and verify."},
+        {"'Calibr': No need to exactly", "hit the mark. Get in the", "calibration window without", "going below 2.0 GPM and", "press 'Cont'"},
+        {"'Calibr': Enter the exact", "amount Metered using the", "'Up' and 'Down' buttons.", "Press 'Save'", NULL},
+        {"Remember!!!", "Calibration may not be", "accurate if product is", "pumped at a rate slower than", "2.0 Gallons per Minute."},
     };
-    static const char *const l_pages[][4] = {
-        {"Liter bucket", "Dispense into", "19 L bucket", NULL},
-        {"Start flow", "then press Cal", "to finish", NULL},
-        {"Adjust amount", "save to fluid", "slot", NULL},
-        {"Return", "goes back to", "bucket setup", NULL},
+    static const char *const l_pages[][5] = {
+        {"'Calibr': Manually calibrate", "using from 10.0 to 30.0", "Litres. Fill a calibrated", "container, adjust the meter", "to match, save and verify."},
+        {"'Calibr': No need to exactly", "hit the mark. Get in the", "calibration window without", "going below 8.0 LPM and", "press 'Cont'"},
+        {"'Calibr': Enter the exact", "amount Metered using the", "'Up' and 'Down' buttons.", "Press 'Save'", NULL},
+        {"Remember!!!", "Calibration may not be", "accurate if product is", "pumped at a rate slower than", "8.0 LPM Litres per Minute."},
     };
     const uint8_t page = s_ui_help_page % 4u;
     const char *const *p = liters ? l_pages[page] : g_pages[page];
-    draw_legacy_menu_screen(p[0], p[1], p[2], p[3], NULL, "Return", "More", NULL, "Cal");
+    draw_legacy_menu_screen(p[0], p[1], p[2], p[3], p[4], "Return", page < 3u ? "More" : NULL, NULL, "Cal");
 }
 
 static void render_quick_cal(void)
 {
+    const dura_quick_cal_entry_t *entry = dura_quick_cal_entry(s_ui_quick_ref);
+    if (!entry) entry = dura_quick_cal_entry(DURA_QUICK_CAL_DEFAULT);
     char ref[8];
-    snprintf(ref, sizeof(ref), "%u", (unsigned)s_ui_quick_ref);
+    snprintf(ref, sizeof(ref), "%u", (unsigned)entry->number);
     draw_legacy_menu_screen(NULL, NULL, NULL, NULL, NULL,
                             "Cancel", "Dn", "Up", "Select");
-    draw_legacy_text_aligned('C', 88, 2, "Quick Calibration", false);
-    draw_legacy_text_aligned('C', 88, 12, "Fluid Reference", false);
+    draw_legacy_text_aligned('C', 88, 2, "Product names for", false);
+    draw_legacy_text_aligned('C', 88, 12, "reference only!", false);
     dura_lcd_draw_bitmap_1bpp(20, 2, dura_asset_thin_glcd_bmp, 13, 5, true);
     dura_lcd_draw_bitmap_1bpp(20, 45, dura_asset_thick_glcd_bmp, 17, 5, true);
     dura_lcd_draw_rect(46, 5, 1, 45, true);
@@ -1349,20 +1392,22 @@ static void render_quick_cal(void)
         dura_lcd_fill_rect(8, i * 2, i / 3, 3, true);
     }
     dura_lcd_fill_rect(0, 1, 7, 50, false);
-    dura_lcd_draw_bitmap_1bpp(0, (int)s_ui_quick_ref <= 23 ? (int)s_ui_quick_ref * 2 : 42,
+    dura_lcd_draw_bitmap_1bpp(0, entry->pointer_y,
                               dura_asset_thick_pointer, 7, 5, true);
-    draw_legacy_text_aligned('C', 88, 25, "Reference #", false);
-    draw_legacy_text_aligned('C', 88, 36, ref, false);
+    draw_legacy_text_aligned('C', 88, 25, entry->product ? entry->product : "Reference #", false);
+    draw_legacy_text_aligned('C', 88, 36, entry->temperature ? entry->temperature : ref, false);
+    /* All values here are staged, including an unsupported legacy endpoint.
+     * Only successful Select publishes a new working calibration. */
+    draw_legacy_text_aligned('C', 29, 8, "Pending", false);
     /* Keep the large reference value right-aligned beside the x=46 divider. */
-    draw_num24_right(46, 14, ref);
+    draw_num24_right(46, 19, ref);
 }
 
 static void render_cal_adjust(const dura_meter_snapshot_t *meter)
 {
     char line[24];
-    (void)meter;
-    snprintf(line, sizeof(line), "%.2f", (double)s_ui_cal_measured_amount);
-    draw_legacy_menu_screen("Adjust", "Measured Amount", NULL, NULL, NULL,
+    snprintf(line, sizeof(line), "%.2f %s", (double)s_ui_cal_measured_amount, unit_label(meter->selected_units));
+    draw_legacy_menu_screen("Enter the amount measured", "Press SAVE when done", NULL, NULL, NULL,
                             "Cancel", "Dn", "Up", "Save");
     draw_legacy_value_box(line);
 }
@@ -1377,12 +1422,68 @@ static const char *legacy_batch_unit_label(dura_units_t units)
     }
 }
 
-static float adjust_batch_amount_tenths(float amount, int delta_tenths)
+static float ui_units_per_gallon(dura_units_t units)
 {
-    int amount_tenths = (int)lroundf(amount * 10.0f);
-    amount_tenths += delta_tenths;
-    if (amount_tenths < 10) amount_tenths = 10;
-    return (float)amount_tenths / 10.0f;
+    /* Match meter conversion (legacy 3.8), not a new metrology policy. */
+    return units == DURA_UNITS_LITER ? 3.8f : units == DURA_UNITS_OUNCE ? 128.0f : 1.0f;
+}
+
+static void ui_enter_batch_editor(bool recirc, dura_units_t units)
+{
+    s_ui_batch_is_recirc = recirc;
+    float *saved = recirc ? &s_ui_recirc_amount_gal : &s_ui_auto_amount_gal;
+    if (!isfinite(*saved) || *saved < 0.0f)
+        *saved = recirc ? DURA_RECIRC_BATCH_DEFAULT_GAL : DURA_AUTO_BATCH_DEFAULT_GAL;
+    s_ui_batch_amount = *saved * ui_units_per_gallon(units);
+    s_ui_batch_units = units;
+    s_ui_screen = recirc ? DURA_UI_RECIRC_EDIT : DURA_UI_AUTO_BATCH_EDIT;
+}
+
+static void ui_sync_batch_units(dura_units_t units)
+{
+    if (s_ui_screen != DURA_UI_AUTO_BATCH_EDIT && s_ui_screen != DURA_UI_RECIRC_EDIT &&
+        s_ui_screen != DURA_UI_BATCH_SET) return;
+    if (s_ui_batch_units != units) {
+        s_ui_batch_amount = s_ui_batch_amount / ui_units_per_gallon(s_ui_batch_units) * ui_units_per_gallon(units);
+        s_ui_batch_units = units;
+    }
+}
+
+static void ui_remember_batch_amount(dura_units_t units)
+{
+    if (!isfinite(s_ui_batch_amount) || s_ui_batch_amount < 0.0f) return;
+    float *saved = s_ui_batch_is_recirc ? &s_ui_recirc_amount_gal : &s_ui_auto_amount_gal;
+    *saved = s_ui_batch_amount / ui_units_per_gallon(units);
+}
+
+static float adjust_batch_amount(float amount, int delta, dura_units_t units)
+{
+    int decimals = units == DURA_UNITS_LITER ? CONFIG_DURA_BOARD_VOLUME_LITER_DECIMALS :
+                   units == DURA_UNITS_OUNCE ? CONFIG_DURA_BOARD_VOLUME_OUNCE_DECIMALS :
+                   CONFIG_DURA_BOARD_VOLUME_GALLON_DECIMALS;
+    const double scale = decimals == 2 ? 100.0 : decimals == 1 ? 10.0 : 1.0;
+    /* Do not cast an unbounded float to int. Zero is editable; the protected
+     * start API still rejects zero and quantities rounding to zero counts. */
+    if (!isfinite(amount) || amount < 0.0f) amount = 0.0f;
+    double next = round((double)amount * scale) + delta;
+    if (next < 0.0) next = 0.0;
+    /* Bound runaway repeats; this is not a guarantee of high-value glyph fit.
+     * Preserve the established display cutoff/high-value policy. */
+    if (next > 9999999.0 * scale) next = 9999999.0 * scale;
+    return (float)(next / scale);
+}
+
+static void ui_adjust_batch_amount(int delta, dura_units_t units)
+{
+    const int decimals = units == DURA_UNITS_LITER ? CONFIG_DURA_BOARD_VOLUME_LITER_DECIMALS :
+                         units == DURA_UNITS_OUNCE ? CONFIG_DURA_BOARD_VOLUME_OUNCE_DECIMALS :
+                         CONFIG_DURA_BOARD_VOLUME_GALLON_DECIMALS;
+    /* Temporarily preserve the existing 0.1-unit held movement while taps
+     * allow hundredths. Whole-unit entry stays whole-unit. This selects no
+     * final Dura speed/ramp: repeat timing and runtime config are unchanged. */
+    if (s_ui_repeat_dispatch && decimals == 2) delta *= 10;
+    s_ui_batch_amount = adjust_batch_amount(s_ui_batch_amount, delta, units);
+    ui_remember_batch_amount(units);
 }
 
 static int volume_display_decimals(float amount, dura_units_t units)
@@ -1446,7 +1547,7 @@ static void render_batch_run(const dura_meter_snapshot_t *meter, bool auto_mode)
 {
     draw_legacy_menu_screen("Press Start to begin.", "Press Stop to end.",
                             NULL, NULL, NULL,
-                            auto_mode ? "Home" : "Stop", NULL,
+                            auto_mode ? "Back" : "Stop", NULL,
                             auto_mode ? "Stop" : NULL, "Start");
     render_legacy_batch_amount(meter->remaining_batch, meter->selected_units);
 }
@@ -1454,19 +1555,12 @@ static void render_batch_run(const dura_meter_snapshot_t *meter, bool auto_mode)
 static void render_manual_run(const dura_meter_snapshot_t *meter)
 {
     char amount[24];
-    char power[20];
-    const dura_battery_measurement_t battery = dura_battery_get_measurement();
 
     format_legacy_batch_amount(amount, sizeof(amount), meter->meter_total, meter->selected_units);
-    if (battery.valid) {
-        snprintf(power, sizeof(power), "Power: %u%%", (unsigned)battery.percent);
-    } else {
-        snprintf(power, sizeof(power), "Power: -- %%");
-    }
 
     dura_lcd_draw_bitmap_1bpp(0, 0, dura_asset_durametertitle_bmp_glcd_bmp, 128, 8, true);
     draw_num40_right(128, 12, amount);
-    draw_legacy_text_aligned('L', 0, 42, power, false);
+
     draw_legacy_text_aligned('R', 128, 42, unit_label(meter->selected_units), false);
     draw_legacy_buttons("Home", "Reset", "Stop", "Start");
 }
@@ -1481,13 +1575,13 @@ static void render_recirc_edit(const dura_meter_snapshot_t *meter)
 static void render_recirc_run(const dura_meter_snapshot_t *meter)
 {
     draw_legacy_menu_screen("Press Start to begin.", "Press Stop to end.", NULL, NULL, NULL,
-                            "Home", NULL, "Stop", "Start");
+                            "Back", NULL, "Stop", "Start");
     render_legacy_batch_amount(meter->remaining_batch, meter->selected_units);
 }
 
-static void render_popup_confirm(const char *line1, const char *line2)
+static void render_popup_confirm(const char *line1, const char *line2, const char *button)
 {
-    draw_legacy_menu_screen(line1, line2, NULL, NULL, NULL, "Home", NULL, NULL, NULL);
+    draw_legacy_menu_screen(line1, line2, NULL, NULL, NULL, button, NULL, NULL, NULL);
 }
 
 typedef struct {
@@ -1605,10 +1699,11 @@ esp_err_t dura_board_render_debug_screen(void)
     dura_meter_snapshot_t meter;
     esp_err_t err = dura_meter_get_snapshot(&meter);
     if (err != ESP_OK) return err;
+    ui_sync_batch_units(meter.selected_units);
 
     if (meter.operation_mode == DURA_OPERATION_MANUAL && meter.pump_enabled) {
         s_ui_screen = DURA_UI_MANUAL;
-    } else if (meter.batch_mode == DURA_BATCH_DONE && s_ui_screen != DURA_UI_RECIRC_RUN) {
+    } else if (meter.batch_mode == DURA_BATCH_DONE) {
         s_ui_screen = DURA_UI_BATCH_COMPLETE;
     } else if (meter.batch_mode == DURA_BATCH_RUNNING || meter.batch_mode == DURA_BATCH_PAUSED) {
         if (meter.operation_mode == DURA_OPERATION_RECIRC) {
@@ -1649,9 +1744,13 @@ esp_err_t dura_board_render_debug_screen(void)
     case DURA_UI_RECIRC_EDIT: render_recirc_edit(&meter); break;
     case DURA_UI_RECIRC_RUN: render_recirc_run(&meter); break;
     case DURA_UI_SETUP: render_setup(&meter); break;
+    case DURA_UI_SETUP_HELP: render_setup_help(); break;
     case DURA_UI_RESET_TOTALS: render_reset_totals(&meter); break;
     case DURA_UI_RESET_HELP: render_reset_help(); break;
     case DURA_UI_INFO_START: render_info_start(&meter); break;
+    case DURA_UI_INFO_SCAN:
+        dura_lcd_draw_bitmap_1bpp(0, 0, dura_asset_QRcodeData, 128, 64, true);
+        break;
     case DURA_UI_INFO_HELP: render_info_help(); break;
     case DURA_UI_COMPANY: render_company(); break;
     case DURA_UI_SWV: render_swv(&meter); break;
@@ -1671,11 +1770,14 @@ esp_err_t dura_board_render_debug_screen(void)
     case DURA_UI_BATCH_RUN: render_batch_run(&meter, false); break;
     case DURA_UI_AUTO_BATCH_EDIT: render_batch_edit(&meter, true); break;
     case DURA_UI_AUTO_BATCH_RUN: render_batch_run(&meter, true); break;
-    case DURA_UI_BATCH_COMPLETE: render_popup_confirm("BATCH PRESET", "FINISHED"); break;
-    case DURA_UI_FLOW_ERROR: render_popup_confirm("FLOW DETECTION", "ERROR"); break;
+    case DURA_UI_BATCH_COMPLETE:
+        render_popup_confirm("BATCH PRESET", "FINISHED", "Back");
+        break;
+    case DURA_UI_FLOW_ERROR: render_popup_confirm("FLOW DETECTION", "ERROR", "Home"); break;
     case DURA_UI_HOME:
     default: draw_legacy_home(&meter); break;
     }
+    render_ui_notice();
     return dura_lcd_flush();
 }
 
@@ -1694,10 +1796,20 @@ static void ui_go_home(void)
 static void handle_external_recirc_press(void)
 {
     if (s_ui_screen != DURA_UI_MAIN_MENU) return;
+    dura_meter_snapshot_t meter;
+    if (dura_meter_get_snapshot(&meter) != ESP_OK ||
+        meter.operation_mode != DURA_OPERATION_IDLE || meter.pump_enabled ||
+        meter.recipe_owner_id != 0 || meter.calibration_mode != DURA_CAL_IDLE ||
+        meter.batch_mode == DURA_BATCH_RUNNING || meter.batch_mode == DURA_BATCH_PAUSED) return;
     dura_board_note_user_activity();
-    (void)dura_meter_set_screen_home();
-    s_ui_batch_amount = DURA_RECIRC_BATCH_DEFAULT_GAL;
-    s_ui_screen = DURA_UI_RECIRC_EDIT;
+    const float amount = s_ui_recirc_amount_gal * ui_units_per_gallon(meter.selected_units);
+    /* Never Home/cancel another owner here; start retains save/admission fences. */
+    if (dura_meter_start_batch_mode(amount, DURA_OPERATION_RECIRC) == ESP_OK) {
+        s_ui_batch_is_recirc = true;
+        s_ui_batch_amount = amount;
+        s_ui_batch_units = meter.selected_units;
+        s_ui_screen = DURA_UI_RECIRC_RUN;
+    }
 }
 #endif
 
@@ -1709,13 +1821,15 @@ static void ui_cancel_calibration_to_start(void)
     }
 }
 
-static void ui_cancel_batch_to_home(void)
+static void ui_cancel_batch_to_home(bool to_editor)
 {
-    esp_err_t err = dura_meter_cancel_batch();
-    if (err == ESP_OK) {
-        ui_go_main();
-        return;
+    bool recirc = s_ui_batch_is_recirc;
+    dura_meter_snapshot_t before;
+    if (dura_meter_get_snapshot(&before) == ESP_OK) {
+        if (before.operation_mode == DURA_OPERATION_RECIRC) recirc = true;
+        else if (before.operation_mode == DURA_OPERATION_AUTO) recirc = false;
     }
+    esp_err_t err = dura_meter_cancel_batch();
 
     /* Meter cancellation is intentionally pump-safe before NVS is written.
      * If persistence fails, follow the already-applied in-memory state instead
@@ -1727,8 +1841,9 @@ static void ui_cancel_batch_to_home(void)
         (updated.batch_mode == DURA_BATCH_EDIT || updated.batch_mode == DURA_BATCH_IDLE) &&
         updated.operation_mode == DURA_OPERATION_IDLE && updated.calibration_mode == DURA_CAL_IDLE &&
         !updated.pump_enabled && updated.recipe_owner_id == 0) {
-        ESP_LOGW(TAG, "batch Home follows safe RAM state after cancel error: %s", esp_err_to_name(err));
-        ui_go_main();
+        if (err != ESP_OK) ESP_LOGW(TAG, "batch Back follows safe RAM state after cancel error: %s", esp_err_to_name(err));
+        if (to_editor) ui_enter_batch_editor(recirc, updated.selected_units);
+        else ui_go_main();
     } else {
         ESP_LOGE(TAG, "batch cancel failed: %s", esp_err_to_name(err));
     }
@@ -1742,7 +1857,7 @@ static uint8_t next_setup_item(uint8_t item)
     case 2: return 3;
     case 3: return 4;
     case 4: return 5;
-    case 5: return 7;   // AVR item 6 Reset2Zero is present but skipped in normal navigation.
+    case 5: return 8;   // Skip legacy Reset2Zero and English-only language selector.
     case 7: return 8;
     case 8: return 48;  // Factory reset first prompt Next skips confirm and enters add-on/company info.
     case 48: return 50;
@@ -1764,7 +1879,8 @@ static void reset_current_total(void)
 
 static void handle_setup_button(dura_button_t b, const dura_meter_snapshot_t *meter)
 {
-    if (b == DURA_BUTTON_UP && s_ui_setup_item != 3u && s_ui_setup_item != 7u) {
+    if (s_ui_setup_item == 7u) s_ui_setup_item = 8u;
+    if (b == DURA_BUTTON_UP && s_ui_setup_item != 3u) {
         ui_go_home();
         return;
     }
@@ -1793,10 +1909,7 @@ static void handle_setup_button(dura_button_t b, const dura_meter_snapshot_t *me
     } else if (s_ui_setup_item == 5u) {
         if (b == DURA_BUTTON_DOWN) (void)dura_meter_set_auto_batch(true);
         else if (b == DURA_BUTTON_SELECT) (void)dura_meter_set_auto_batch(false);
-    } else if (s_ui_setup_item == 7u) {
-        if (b == DURA_BUTTON_UP) (void)dura_meter_set_language(DURA_LANGUAGE_ENGLISH);
-        else if (b == DURA_BUTTON_DOWN) (void)dura_meter_set_language(DURA_LANGUAGE_PORTUGUESE);
-        else if (b == DURA_BUTTON_SELECT) (void)dura_meter_set_language(DURA_LANGUAGE_SPANISH);
+
     } else if (s_ui_setup_item == 8u && b == DURA_BUTTON_DOWN) {
         s_ui_setup_item = 9u;
         return;
@@ -1804,6 +1917,10 @@ static void handle_setup_button(dura_button_t b, const dura_meter_snapshot_t *me
         (void)dura_meter_factory_defaults();
         (void)dura_meter_save();
         ui_go_home();
+        return;
+    } else if ((s_ui_setup_item == 48u || s_ui_setup_item == 50u || s_ui_setup_item == 53u) &&
+               b == DURA_BUTTON_SELECT) {
+        s_ui_screen = DURA_UI_SETUP_HELP;
         return;
     }
 
@@ -1816,12 +1933,18 @@ static void handle_setup_button(dura_button_t b, const dura_meter_snapshot_t *me
 
 static bool choose_precal_fluid(uint8_t profile_index)
 {
-    if (dura_meter_select_precal_profile(profile_index) == ESP_OK) {
+    esp_err_t err = dura_meter_select_precal_profile(profile_index);
+    if (err == ESP_OK) {
         ui_go_home();
+        ui_show_notice("Calibration recalled", "Ready");
         return true;
     }
-    /* Legacy source leaves an empty Fluid slot selected on the menu and shows
-     * "no saved calibration". Keep the menu open without changing coefficients. */
+    if (err == ESP_ERR_NOT_FOUND) {
+        ui_go_home();
+        ui_show_notice("No saved calibration", "Choose another fluid");
+    } else {
+        ui_show_notice("Save failed", "Retry or Cancel");
+    }
     return false;
 }
 
@@ -1829,15 +1952,23 @@ static bool store_precal_fluid(uint8_t profile_index)
 {
     if (dura_meter_finish_calibration(profile_index) == ESP_OK) {
         ui_go_home();
+        char slot[16];
+        if (profile_index == 0u) snprintf(slot, sizeof(slot), "Water");
+        else snprintf(slot, sizeof(slot), "Fluid%u", (unsigned)profile_index);
+        ui_show_notice("Calibration saved", slot);
         return true;
     }
+    ui_show_notice("Save failed", "Retry or Cancel");
     return false;
 }
 
 static void dura_board_handle_button(dura_button_t b)
 {
     dura_meter_snapshot_t meter;
-    (void)dura_meter_get_snapshot(&meter);
+    if (dura_meter_get_snapshot(&meter) != ESP_OK) return;
+    /* Feedback must never consume a safety key or delay normal UI work. */
+    ui_sync_batch_units(meter.selected_units);
+    s_ui_notice_until_us = 0;
 
     if (should_show_provisioning_qr(&meter)) {
         s_provisioning_qr_dismissed = true;
@@ -1854,12 +1985,10 @@ static void dura_board_handle_button(dura_button_t b)
         } else if (b == DURA_BUTTON_DOWN) {
             s_ui_screen = DURA_UI_CAL_START;
         } else if (b == DURA_BUTTON_SELECT) {
-            s_ui_batch_amount = DURA_RECIRC_BATCH_DEFAULT_GAL;
-            s_ui_screen = DURA_UI_RECIRC_EDIT;
+            ui_enter_batch_editor(true, meter.selected_units);
         } else if (b == DURA_BUTTON_BACK) {
             if (dura_meter_set_auto_batch(true) == ESP_OK) {
-                s_ui_batch_amount = DURA_AUTO_BATCH_DEFAULT_GAL;
-                s_ui_screen = DURA_UI_AUTO_BATCH_EDIT;
+                ui_enter_batch_editor(false, meter.selected_units);
             }
         }
         break;
@@ -1878,9 +2007,10 @@ static void dura_board_handle_button(dura_button_t b)
         break;
 
     case DURA_UI_RECIRC_EDIT:
+        ui_remember_batch_amount(meter.selected_units);
         if (b == DURA_BUTTON_UP) ui_go_main();
-        else if (b == DURA_BUTTON_DOWN) s_ui_batch_amount = adjust_batch_amount_tenths(s_ui_batch_amount, -1);
-        else if (b == DURA_BUTTON_SELECT) s_ui_batch_amount = adjust_batch_amount_tenths(s_ui_batch_amount, 1);
+        else if (b == DURA_BUTTON_DOWN) ui_adjust_batch_amount(-1, meter.selected_units);
+        else if (b == DURA_BUTTON_SELECT) ui_adjust_batch_amount(1, meter.selected_units);
         else if (b == DURA_BUTTON_BACK &&
                  dura_meter_start_batch_mode(s_ui_batch_amount, DURA_OPERATION_RECIRC) == ESP_OK) {
             s_ui_screen = DURA_UI_RECIRC_RUN;
@@ -1889,11 +2019,7 @@ static void dura_board_handle_button(dura_button_t b)
 
     case DURA_UI_RECIRC_RUN:
         if (b == DURA_BUTTON_UP) {
-            if (meter.batch_mode == DURA_BATCH_RUNNING || meter.batch_mode == DURA_BATCH_PAUSED ||
-                meter.batch_mode == DURA_BATCH_DONE) {
-                (void)dura_meter_cancel_batch();
-            }
-            ui_go_main();
+            ui_cancel_batch_to_home(true);
         } else if (b == DURA_BUTTON_SELECT && meter.batch_mode == DURA_BATCH_RUNNING) {
             (void)dura_meter_pause_batch();
         } else if (b == DURA_BUTTON_BACK && meter.batch_mode == DURA_BATCH_PAUSED) {
@@ -1903,6 +2029,10 @@ static void dura_board_handle_button(dura_button_t b)
 
     case DURA_UI_SETUP:
         handle_setup_button(b, &meter);
+        break;
+
+    case DURA_UI_SETUP_HELP:
+        if (b == DURA_BUTTON_UP) s_ui_screen = DURA_UI_SETUP;
         break;
 
     case DURA_UI_RESET_TOTALS:
@@ -1918,14 +2048,21 @@ static void dura_board_handle_button(dura_button_t b)
 
     case DURA_UI_INFO_START:
         if (b == DURA_BUTTON_UP) ui_go_home();
-        else if (b == DURA_BUTTON_DOWN) s_ui_screen = DURA_UI_HOME; // Scan screen not ported; return safely.
+        else if (b == DURA_BUTTON_DOWN) s_ui_screen = DURA_UI_INFO_SCAN;
         else if (b == DURA_BUTTON_SELECT) { s_ui_info_page = 0u; s_ui_screen = DURA_UI_INFO_HELP; }
         else if (b == DURA_BUTTON_BACK) s_ui_screen = DURA_UI_COMPANY;
         break;
 
+    case DURA_UI_INFO_SCAN:
+        s_ui_screen = DURA_UI_INFO_START;
+        break;
+
     case DURA_UI_INFO_HELP:
         if (b == DURA_BUTTON_UP) ui_go_home();
-        else if (b == DURA_BUTTON_SELECT) s_ui_info_page = (uint8_t)((s_ui_info_page + 1u) % 8u);
+        else if (b == DURA_BUTTON_SELECT) {
+            if (s_ui_info_page < 7u) s_ui_info_page++;
+            else s_ui_screen = DURA_UI_INFO_START;
+        }
         else if (b == DURA_BUTTON_BACK) s_ui_screen = DURA_UI_INFO_START;
         break;
 
@@ -1955,7 +2092,8 @@ static void dura_board_handle_button(dura_button_t b)
         }
         else if (b == DURA_BUTTON_SELECT) s_ui_screen = DURA_UI_PRECAL_1;
         else if (b == DURA_BUTTON_BACK) {
-            s_ui_quick_ref = meter.quick_cal_reference;
+            s_ui_quick_ref = dura_quick_cal_entry(meter.quick_cal_reference)
+                ? meter.quick_cal_reference : DURA_QUICK_CAL_DEFAULT;
             s_ui_screen = DURA_UI_QUICK_CAL;
         }
         break;
@@ -1979,9 +2117,17 @@ static void dura_board_handle_button(dura_button_t b)
             (void)dura_meter_cancel_calibration();
             s_ui_screen = DURA_UI_CAL_START;
         }
-        else if (b == DURA_BUTTON_DOWN && s_ui_quick_ref > DURA_QUICK_CAL_REFERENCE_MIN) s_ui_quick_ref--;
-        else if (b == DURA_BUTTON_SELECT && s_ui_quick_ref < DURA_QUICK_CAL_REFERENCE_MAX) s_ui_quick_ref++;
-        else if (b == DURA_BUTTON_BACK && dura_meter_apply_quick_cal(s_ui_quick_ref) == ESP_OK) ui_go_home();
+        else if (b == DURA_BUTTON_DOWN || b == DURA_BUTTON_SELECT) {
+            if (b == DURA_BUTTON_DOWN && s_ui_quick_ref > DURA_QUICK_CAL_REFERENCE_MIN) s_ui_quick_ref--;
+            else if (b == DURA_BUTTON_SELECT && s_ui_quick_ref < DURA_QUICK_CAL_REFERENCE_MAX) s_ui_quick_ref++;
+            /* Number increases from Thin1 at the top to Thick21 below. */
+            else ui_show_notice("Reference limit", "Use manual calibration");
+        } else if (b == DURA_BUTTON_BACK) {
+            if (dura_meter_apply_quick_cal(s_ui_quick_ref) == ESP_OK) {
+                ui_go_home();
+                ui_show_notice("Calibration saved", "Quick Cal");
+            } else ui_show_notice("Save failed", "Retry or Cancel");
+        }
         break;
 
     case DURA_UI_BUCKET_GAL:
@@ -1989,13 +2135,25 @@ static void dura_board_handle_button(dura_button_t b)
         if (b == DURA_BUTTON_UP) { ui_cancel_calibration_to_start(); }
         else if (b == DURA_BUTTON_DOWN) { s_ui_help_page = 0u; s_ui_screen = (s_ui_screen == DURA_UI_BUCKET_LITER) ? DURA_UI_CAL_HELP_LITER : DURA_UI_CAL_HELP_GAL; }
         else if (b == DURA_BUTTON_SELECT) { (void)dura_meter_reset_calibration(); }
-        else if (b == DURA_BUTTON_BACK) { (void)dura_meter_continue_calibration(); }
+        else if (b == DURA_BUTTON_BACK) {
+            const esp_err_t err = dura_meter_continue_calibration();
+            dura_meter_snapshot_t after;
+            if (err != ESP_OK || dura_meter_get_snapshot(&after) != ESP_OK) {
+                ui_show_notice("Calibration error", "Retry or Cancel");
+            } else if (after.calibration_mode == DURA_CAL_WAIT_MEASURED_AMOUNT) {
+                char counts[16];
+                snprintf(counts, sizeof(counts), "%lu", (unsigned long)after.calibration_counts);
+                ui_show_notice("Cal Counts", counts);
+            } else if (after.calibration_mode == DURA_CAL_RUNNING) {
+                ui_show_notice("Not enough flow", "Counts reset; retry");
+            }
+        }
         break;
 
     case DURA_UI_CAL_HELP_GAL:
     case DURA_UI_CAL_HELP_LITER:
         if (b == DURA_BUTTON_UP) s_ui_screen = (s_ui_screen == DURA_UI_CAL_HELP_LITER) ? DURA_UI_BUCKET_LITER : DURA_UI_BUCKET_GAL;
-        else if (b == DURA_BUTTON_DOWN) s_ui_help_page = (uint8_t)((s_ui_help_page + 1u) % 4u);
+        else if (b == DURA_BUTTON_DOWN && s_ui_help_page < 3u) s_ui_help_page++;
         else if (b == DURA_BUTTON_BACK) s_ui_screen = (s_ui_screen == DURA_UI_CAL_HELP_LITER) ? DURA_UI_BUCKET_LITER : DURA_UI_BUCKET_GAL;
         break;
 
@@ -2024,8 +2182,8 @@ static void dura_board_handle_button(dura_button_t b)
 
     case DURA_UI_BATCH_SET:
         if (b == DURA_BUTTON_UP) s_ui_batch_amount = 10.0f;
-        else if (b == DURA_BUTTON_DOWN) s_ui_batch_amount = adjust_batch_amount_tenths(s_ui_batch_amount, -1);
-        else if (b == DURA_BUTTON_SELECT) s_ui_batch_amount = adjust_batch_amount_tenths(s_ui_batch_amount, 1);
+        else if (b == DURA_BUTTON_DOWN) ui_adjust_batch_amount(-1, meter.selected_units);
+        else if (b == DURA_BUTTON_SELECT) ui_adjust_batch_amount(1, meter.selected_units);
         else if (b == DURA_BUTTON_BACK && dura_meter_start_batch(s_ui_batch_amount) == ESP_OK) s_ui_screen = DURA_UI_BATCH_RUN;
         break;
 
@@ -2038,15 +2196,16 @@ static void dura_board_handle_button(dura_button_t b)
         break;
 
     case DURA_UI_AUTO_BATCH_EDIT:
+        ui_remember_batch_amount(meter.selected_units);
         if (b == DURA_BUTTON_UP) ui_go_home();
-        else if (b == DURA_BUTTON_DOWN) s_ui_batch_amount = adjust_batch_amount_tenths(s_ui_batch_amount, -1);
-        else if (b == DURA_BUTTON_SELECT) s_ui_batch_amount = adjust_batch_amount_tenths(s_ui_batch_amount, 1);
+        else if (b == DURA_BUTTON_DOWN) ui_adjust_batch_amount(-1, meter.selected_units);
+        else if (b == DURA_BUTTON_SELECT) ui_adjust_batch_amount(1, meter.selected_units);
         else if (b == DURA_BUTTON_BACK && dura_meter_start_batch(s_ui_batch_amount) == ESP_OK) s_ui_screen = DURA_UI_AUTO_BATCH_RUN;
         break;
 
     case DURA_UI_AUTO_BATCH_RUN:
         if (b == DURA_BUTTON_UP) {
-            ui_cancel_batch_to_home();
+            ui_cancel_batch_to_home(true);
         } else if (b == DURA_BUTTON_SELECT && meter.batch_mode == DURA_BATCH_RUNNING) {
             (void)dura_meter_pause_batch();
         } else if (b == DURA_BUTTON_BACK && meter.batch_mode == DURA_BATCH_PAUSED) {
@@ -2056,14 +2215,14 @@ static void dura_board_handle_button(dura_button_t b)
 
     case DURA_UI_BATCH_COMPLETE:
         if (b == DURA_BUTTON_UP) {
-            ui_cancel_batch_to_home();
+            ui_cancel_batch_to_home(true);
         }
         break;
 
     case DURA_UI_FLOW_ERROR:
         if (b == DURA_BUTTON_UP) {
             (void)dura_meter_clear_fault();
-            ui_cancel_batch_to_home();
+            ui_cancel_batch_to_home(false);
         }
         break;
 
@@ -2113,6 +2272,16 @@ static void dispatch_ui_button(dura_button_t button)
     if (button == DURA_BUTTON_BACK) (void)dura_meter_stop_batch();
 #endif
 }
+
+#if !CONFIG_DURA_BOARD_LCD_HOLD_SPLASH_ON_BOOT
+static void dispatch_ui_button_repeat(dura_button_t button)
+{
+    const bool previous = s_ui_repeat_dispatch;
+    s_ui_repeat_dispatch = true;
+    dispatch_ui_button(button);
+    s_ui_repeat_dispatch = previous;
+}
+#endif
 
 static void board_task(void *arg)
 {
@@ -2216,7 +2385,7 @@ static void board_task(void *arg)
                     if (interval_ms != UINT32_MAX) {
                         const int64_t interval_us = (int64_t)interval_ms * 1000LL;
                         if (since_repeat_us >= interval_us) {
-                            dispatch_ui_button(b);
+                            dispatch_ui_button_repeat(b);
                             last_button_repeat_us = button_sample_us -
                                 (since_repeat_us % interval_us);
                         }
