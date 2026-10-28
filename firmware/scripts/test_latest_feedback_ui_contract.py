@@ -188,7 +188,7 @@ recirc_run_render = extract_function(board, "render_recirc_run")
 for literal in (
     '"Press Start to begin."',
     '"Press Stop to end."',
-    '"Home", NULL, "Stop", "Start"',
+    '"Back", NULL, "Stop", "Start"',
     "render_legacy_batch_amount(meter->remaining_batch, meter->selected_units);",
 ):
     require_literal(recirc_run_render, literal, f"Recirc run-screen contract changed: {literal}")
@@ -201,7 +201,7 @@ auto_run_render = extract_function(board, "render_batch_run")
 for literal in (
     '"Press Start to begin."',
     '"Press Stop to end."',
-    'auto_mode ? "Home" : "Stop"',
+    'auto_mode ? "Back" : "Stop"',
     'auto_mode ? "Stop" : NULL, "Start"',
     "render_legacy_batch_amount(meter->remaining_batch, meter->selected_units);",
 ):
@@ -217,7 +217,7 @@ manual = extract_function(board, "render_manual_run")
 for literal in (
     'dura_lcd_draw_bitmap_1bpp(0, 0, dura_asset_durametertitle_bmp_glcd_bmp, 128, 8, true);',
     "draw_num40_right(128, 12, amount);",
-    "draw_legacy_text_aligned('L', 0, 42, power, false);",
+
     "draw_legacy_text_aligned('R', 128, 42, unit_label(meter->selected_units), false);",
     'draw_legacy_buttons("Home", "Reset", "Stop", "Start");',
 ):
@@ -231,8 +231,8 @@ button_router = extract_function(board, "dura_board_handle_button")
 for literal in (
     "s_ui_screen = DURA_UI_MANUAL;",
     "s_ui_screen = DURA_UI_CAL_START;",
-    "s_ui_screen = DURA_UI_RECIRC_EDIT;",
-    "s_ui_screen = DURA_UI_AUTO_BATCH_EDIT;",
+    "ui_enter_batch_editor(true, meter.selected_units);",
+    "ui_enter_batch_editor(false, meter.selected_units);",
     "dura_meter_start_manual();",
     "dura_meter_stop_manual();",
     "dura_meter_start_batch_mode(s_ui_batch_amount, DURA_OPERATION_RECIRC)",
@@ -247,8 +247,9 @@ for literal in (
 external_recirc = extract_function(board, "handle_external_recirc_press")
 for literal in (
     "if (s_ui_screen != DURA_UI_MAIN_MENU) return;",
-    "s_ui_batch_amount = DURA_RECIRC_BATCH_DEFAULT_GAL;",
-    "s_ui_screen = DURA_UI_RECIRC_EDIT;",
+    "s_ui_recirc_amount_gal * ui_units_per_gallon(meter.selected_units)",
+    "dura_meter_start_batch_mode(amount, DURA_OPERATION_RECIRC) == ESP_OK",
+    "s_ui_screen = DURA_UI_RECIRC_RUN;",
 ):
     require_literal(external_recirc, literal, f"external Recirc Main-Menu gate changed: {literal}")
 

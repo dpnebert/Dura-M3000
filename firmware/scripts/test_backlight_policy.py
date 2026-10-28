@@ -18,18 +18,21 @@ def generate_board(root, out):
     text = board.read_text()
     ui = text[text.index('typedef enum {\n    DURA_UI_MAIN_MENU'):text.index('static bool s_low_battery_blink_active;')]
     event = re.search(r'typedef struct\s*\{[^}]*\}\s*dura_flow_event_t;', text).group()
-    generated = ui+'\n'+event+'\n'
+    from test_home_volume_ui import config_defines
+    generated = config_defines(root)+ui+'\n'+event+'\n'
+    for name in ('ui_units_per_gallon','ui_enter_batch_editor','ui_sync_batch_units','ui_remember_batch_amount','adjust_batch_amount','ui_adjust_batch_amount','ui_show_notice'):
+        generated += function(text,name)+'\n'
     # New helpers are included if present, allowing the identical tests to run RED.
     for name in ['dura_board_set_ble_connected', 'dura_board_note_activity',
                  'dura_board_note_user_activity', 'update_backlight']:
         if re.search(r'\b'+name+r'\([^;]*\)\s*\{', text):
             generated += function(text, name)+'\n'
     for name in ['flow_isr', 'flow_event_counts', 'dura_board_take_flow_pulses', 'flow_boundary',
-                 'ui_go_main', 'ui_go_home', 'adjust_batch_amount_tenths',
+                 'ui_go_main', 'ui_go_home',
                  'ui_cancel_batch_to_home',
                  'dura_board_handle_button', 'ui_button_is_repeatable',
                  'handle_external_recirc_press', 'dura_board_enqueue_button', 'dispatch_ui_button',
-                 'board_task']:
+                 'dispatch_ui_button_repeat', 'board_task']:
         generated += function(text, name)+'\n'
     generated += function(lcd.read_text(), 'dura_lcd_set_backlight')+'\n'
     generated += function(lcd.read_text(), 'dura_lcd_init')+'\n'

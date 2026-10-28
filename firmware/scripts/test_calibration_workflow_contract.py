@@ -173,7 +173,7 @@ check(bool(re.search(
     normalized_bucket)), "bucket Help is not bound to DOWN", failures)
 check("else if (b == DURA_BUTTON_SELECT) { (void)dura_meter_reset_calibration(); }" in normalized_bucket,
       "bucket Reset is not bound to SELECT", failures)
-check("else if (b == DURA_BUTTON_BACK) { (void)dura_meter_continue_calibration(); }" in normalized_bucket,
+check("else if (b == DURA_BUTTON_BACK) { const esp_err_t err = dura_meter_continue_calibration();" in normalized_bucket,
       "bucket Cont is not bound to BACK", failures)
 check("dura_meter_start_calibration" not in bucket,
       "Cont still invokes start calibration", failures)
@@ -396,7 +396,10 @@ typedef struct {{
     uint8_t pending_quick_reference;
     float working_coef_gal, working_coef_liter, working_coef_ounce;
 }} host_meter_t;
+typedef host_meter_t dura_meter_snapshot_t;
 static host_meter_t s_meter;
+static esp_err_t dura_meter_get_snapshot(dura_meter_snapshot_t *out) {{ *out=s_meter; return ESP_OK; }}
+static void ui_show_notice(const char *a, const char *b) {{ (void)a; (void)b; }}
 static bool s_load_in_progress, s_sleep_prepared;
 static bool s_calibration_save_in_progress;
 static uint64_t s_control_epoch;

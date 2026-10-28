@@ -94,6 +94,11 @@ static void draw_num24_text(uint8_t x,uint8_t y,const char *text) {
 '''
     # Whole render region includes formatting selectors added in production later.
     render = board[board.index('static uint8_t legacy_font_char_width'):board.index('typedef struct {\n    int x;')]
+    # Observe text without replacing the production pixel/font chain.
+    prelude += 'static char rendered_text[8192];\n'
+    text_fn = function(board, 'draw_legacy_text_aligned')
+    observed = text_fn.replace('{', '{\n    if(text && strlen(rendered_text)+strlen(text)+2 < sizeof(rendered_text)) { strcat(rendered_text,text); strcat(rendered_text,"\\n"); }', 1)
+    render = render.replace(text_fn, observed)
     prelude += '#define draw_legacy_button actual_legacy_button\n'+render+'\n#undef draw_legacy_button\n'
     # Macro was active for callers above: use a forward-declared observer instead.
     prelude = prelude.replace('#define draw_legacy_button actual_legacy_button\n',
@@ -132,11 +137,36 @@ static size_t strlcpy(char*d,const char*s,size_t n){snprintf(d,n,"%s",s);return 
     for n in ('next_setup_item','reset_current_total','handle_setup_button',
               'choose_precal_fluid','store_precal_fluid','dura_board_handle_button'):
         prelude += function(board,n)+'\n'
+    prelude += '\nstatic void dura_board_note_user_activity(void){}\n'
+    prelude += function(board, 'handle_external_recirc_press')+'\n'
     # Reuse real board output chain and mature hardware safety fixture.
     output = (root/'scripts/test_calibration_save_recovery.py').read_text()
     output = output[output.index('#define CONFIG_DURA_BOARD_ENABLE_PUMP_OUTPUT'):output.index("'''",output.index('#define CONFIG_DURA_BOARD_ENABLE_PUMP_OUTPUT'))]
     prelude += output+'\n'+function(board,'apply_meter_outputs')+'\n'+function(board,'dura_board_sync_outputs')
     prelude += '\nvoid test_board_bind(void){CHECK(dura_meter_set_output_handler(apply_meter_outputs)==ESP_OK);}\n'
+    # Compile the actual hardware press/repeat/release branch, not a simulated
+    # dispatcher. Only clock, config storage and snapshot publication are shims.
+    prelude += r'''
+#include "dura_ui_behavior.h"
+#include "dura_ui_config.h"
+#define CONFIG_DURA_BOARD_SETTINGS_HOLD_MS 1000
+static portMUX_TYPE s_ui_snapshot_mux = portMUX_INITIALIZER_UNLOCKED;
+static int64_t s_last_activity_us;
+static void publish_ui_snapshot(const dura_meter_snapshot_t *m){(void)m;}
+esp_err_t dura_ui_config_get(dura_ui_runtime_config_t *c){
+    memset(c,0,sizeof(*c));c->button_hold_max_rate_x=10;return ESP_OK;
+}
+'''
+    prelude += function((root/'components/dura_board/dura_ui_behavior.c').read_text(), 'dura_ui_button_repeat_interval_ms')+'\n'
+    prelude += function(board,'ui_button_is_repeatable')+'\n'
+    prelude += function(board,'dispatch_ui_button')+'\n'
+    if 'static void dispatch_ui_button_repeat(' in board:
+        prelude += function(board,'dispatch_ui_button_repeat')+'\n'
+    task = function(board,'board_task')
+    state = task[task.index('    dura_button_t last_button'):task.index('#if CONFIG_DURA_BOARD_ENABLE_RECIRC_INPUT')]
+    state = re.sub(r'^    (dura_button_t|int64_t|bool) ',r'    static \1 ',state,flags=re.M)
+    branch = task[task.index('        const int64_t button_sample_us'):task.index('        last_button = b;')+len('        last_button = b;')]
+    prelude += '\nstatic void hardware_button_sample(dura_button_t b){\n'+state+branch+'\n}\n'
     (out/'board_home_volume.inc').write_text(prelude)
 
 

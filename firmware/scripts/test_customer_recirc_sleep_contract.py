@@ -149,13 +149,13 @@ assert re.search(
 ), "Recirc edit screen must match the supplied text and soft keys"
 assert re.search(
     r"render_recirc_run.*?Press Start to begin\..*?Press Stop to end\..*?"
-    r"Home.*?NULL.*?Stop.*?Start",
+    r"Back.*?NULL.*?Stop.*?Start",
     board,
     re.DOTALL,
 ), "Recirc run screen must expose Home / blank / Stop / Start"
 # M-3000 product naming preserves genuine legacy artwork, not a literal label.
 check_customer_title(project)
-assert re.search(r"render_manual_run.*?\"Power: %u%%\".*?\"Home\", \"Reset\", \"Stop\", \"Start\"", board, re.DOTALL)
+assert '"Power: %u%%"' not in board[board.index('static void render_manual_run'):board.index('static void render_recirc_edit')]
 manual_render = re.search(
     r"static void render_manual_run\([^)]*\)\s*\{.*?^\}",
     board,
@@ -252,7 +252,7 @@ assert app.count("dura_board_set_ble_connected(") >= 2
 # Customer Recirc default and run-screen key behavior.
 assert re.search(r"#define\s+DURA_AUTO_BATCH_DEFAULT_GAL\s+10\.0f", board)
 assert re.search(r"#define\s+DURA_RECIRC_BATCH_DEFAULT_GAL\s+250\.0f", board)
-assert board.count("s_ui_batch_amount = DURA_RECIRC_BATCH_DEFAULT_GAL;") >= 1
+assert "s_ui_recirc_amount_gal = DURA_RECIRC_BATCH_DEFAULT_GAL;" in board
 assert board.count("s_ui_batch_amount = DURA_AUTO_BATCH_DEFAULT_GAL;") >= 1
 recirc_run = re.search(
     r"case\s+DURA_UI_RECIRC_RUN\s*:\s*\n\s*if\s*\(b.*?\n\s*break;",
@@ -260,7 +260,7 @@ recirc_run = re.search(
     re.DOTALL,
 )
 assert recirc_run, "missing Recirc run button routing"
-assert "DURA_BUTTON_UP" in recirc_run.group(0) and "dura_meter_cancel_batch()" in recirc_run.group(0)
+assert "DURA_BUTTON_UP" in recirc_run.group(0) and "ui_cancel_batch_to_home(true)" in recirc_run.group(0)
 assert "DURA_BUTTON_SELECT" in recirc_run.group(0) and "dura_meter_pause_batch()" in recirc_run.group(0)
 assert "DURA_BUTTON_BACK" in recirc_run.group(0) and "dura_meter_resume_batch()" in recirc_run.group(0)
 

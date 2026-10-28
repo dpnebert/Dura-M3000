@@ -49,8 +49,11 @@ def main():
 static bool s_ui_cal_measured_amount_valid;
 static float s_ui_cal_measured_amount;
 static uint8_t s_ui_quick_ref, s_ui_help_page;
+static char s_ui_notice_line1[32], s_ui_notice_line2[32];
+static int64_t s_ui_notice_until_us;
 '''
     generated += '\n'.join(function(board, name) for name in (
+        'ui_show_notice',
         'ui_go_main', 'ui_go_home', 'ui_cancel_calibration_to_start',
         'choose_precal_fluid', 'store_precal_fluid'))
     generated += '\nstatic void ui_button(dura_button_t b) {\n dura_meter_snapshot_t meter = snap();\n switch(s_ui_screen) {\n' + cases + '\n default: CHECK(false); }\n}\n'

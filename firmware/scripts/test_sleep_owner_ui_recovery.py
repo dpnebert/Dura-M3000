@@ -45,10 +45,14 @@ def main():
                         'int dura_board_render_debug_screen(void);')
     base += function(fixture.read_text(), 'restored')
     ui = text[text.index('typedef enum {\n    DURA_UI_MAIN_MENU'):text.index('static bool s_low_battery_blink_active;')]
+    from test_home_volume_ui import config_defines
+    ui = config_defines(root)+ui
     render = function(text, 'dura_board_render_debug_screen')
     leaves = sorted(set(re.findall(r'\b(render_\w+|draw_legacy_home)\(', render)))
     preamble = r'''
 #include "esp_log.h"
+#include <math.h>
+static void ui_sync_batch_units(dura_units_t units);
 #define RTC_DATA_ATTR
 #define DURA_AUTO_BATCH_DEFAULT_GAL 10
 #define DURA_RECIRC_BATCH_DEFAULT_GAL 10
@@ -84,10 +88,14 @@ int dura_lcd_flush(void){return ESP_OK;}
 #define ui_cancel_calibration_to_start(...) CHECK_UNVISITED()
 
 #define CHECK_UNVISITED() abort()
+/* Scan is outside this owner-recovery fixture; do not silently accept dispatch. */
+static const uint8_t dura_asset_QRcodeData[1024];
+static void dura_lcd_draw_bitmap_1bpp(int x,int y,const uint8_t *p,int w,int h,bool invert){CHECK_UNVISITED();}
+#define draw_legacy_buttons(...) ((void)0)
 '''
     preamble += '\n'.join('#define '+name+'(...) ((void)0)' for name in leaves)+'\n'
-    helpers = '\n'.join(function(text, n) for n in ['ui_go_main', 'ui_go_home', 'ui_cancel_batch_to_home',
-                          'dura_board_handle_button', 'ui_button_is_repeatable', 'dispatch_ui_button'])
+    helpers = '\n'.join(function(text, n) for n in ['ui_units_per_gallon','ui_enter_batch_editor','ui_sync_batch_units','ui_remember_batch_amount','adjust_batch_amount','ui_adjust_batch_amount','ui_show_notice','ui_go_main', 'ui_go_home', 'ui_cancel_batch_to_home',
+                          'dura_board_handle_button', 'ui_button_is_repeatable', 'dispatch_ui_button', 'dispatch_ui_button_repeat'])
     cmain = r'''
 static void owner_iteration(void){if(!setjmp(owner_done))board_task(NULL);}
 static void owner_button(int b){CHECK(!queued_test_button);queued_test_button=b;owner_iteration();CHECK(!queued_test_button);}
@@ -138,10 +146,11 @@ int main(int argc,char**argv){
      restored();
    }
    owner_button(DURA_BUTTON_UP);
-   CHECK(s_ui_screen==DURA_UI_MAIN_MENU);
+   CHECK(s_ui_screen==DURA_UI_RECIRC_EDIT);
    CHECK(dura_meter_get_snapshot(&m)==ESP_OK);
    CHECK(m.operation_mode==DURA_OPERATION_IDLE&&m.batch_mode!=DURA_BATCH_PAUSED);
-   CHECK(dura_board_render_debug_screen()==ESP_OK);CHECK(s_ui_screen==DURA_UI_MAIN_MENU);restored();
+   CHECK(dura_board_render_debug_screen()==ESP_OK);CHECK(s_ui_screen==DURA_UI_RECIRC_EDIT);restored();
+   owner_button(DURA_BUTTON_UP);CHECK(s_ui_screen==DURA_UI_MAIN_MENU);
  }else CHECK(s_ui_setup_item==7&&s_ui_cal_measured_amount==23.5f&&s_ui_cal_measured_amount_valid);
  CHECK(dura_meter_start_manual()==ESP_OK);
  puts("PASS owner recovery, safe UI/control context and navigation retained");return 0;

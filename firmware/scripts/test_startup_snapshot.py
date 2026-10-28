@@ -109,12 +109,16 @@ static int optional_screen(dura_ui_screen_t screen) {
     switch (screen) {
     case DURA_UI_MANUAL: case DURA_UI_SETUP: case DURA_UI_RESET_TOTALS:
     case DURA_UI_RESET_HELP: case DURA_UI_INFO_START: case DURA_UI_INFO_HELP:
-    case DURA_UI_COMPANY: case DURA_UI_SWV: case DURA_UI_BATTERY: return 1;
+    case DURA_UI_COMPANY: case DURA_UI_SWV: case DURA_UI_BATTERY:
+    case DURA_UI_SETUP_HELP: case DURA_UI_INFO_SCAN: return 1;
     default: return 0;
     }
 }
 static void scenario(dura_ui_screen_t screen, int status, int optional) {
     s_ui_screen = screen;
+    /* Setup Help is entered only from these exact implemented parent items. */
+    if (screen == DURA_UI_SETUP_HELP && s_ui_setup_item != 48 &&
+        s_ui_setup_item != 50 && s_ui_setup_item != 53) s_ui_setup_item = 48;
     fixture = (dura_board_ui_snapshot_t){.meter_total=12.5f};
     ui_legacy_ids(&fixture.legacy_screen_id, &fixture.legacy_menu_id);
     if (screen == DURA_UI_MANUAL) {
@@ -152,6 +156,12 @@ int main(void) {
     for (int screen = 0; screen < DURA_UI_SCREEN_COUNT; screen++) {
         for (size_t i=0; i<sizeof(statuses)/sizeof(statuses[0]); i++)
             scenario((dura_ui_screen_t)screen, statuses[i], optional_screen(screen));
+    }
+    const int help_parents[] = {48, 50, 53};
+    for (unsigned p=0; p<3; p++) {
+        s_ui_setup_item = help_parents[p];
+        for (size_t i=0; i<sizeof(statuses)/sizeof(statuses[0]); i++)
+            scenario(DURA_UI_SETUP_HELP, statuses[i], 1);
     }
     /* Setup contains both supported and intentionally unsupported edit layouts. */
     for (int item=0; item<12; item++) {

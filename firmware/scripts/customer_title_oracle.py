@@ -50,7 +50,7 @@ static uint8_t s_fb[1024];
 typedef struct { float meter_total; int selected_units; } dura_meter_snapshot_t;
 typedef struct { bool valid; unsigned percent; } dura_battery_measurement_t;
 static bool battery_valid;
-static dura_battery_measurement_t dura_battery_get_measurement(void) {
+dura_battery_measurement_t dura_battery_get_measurement(void) {
     return (dura_battery_measurement_t){battery_valid, 75};
 }
 static void format_legacy_batch_amount(char *s, size_t n, float v, int u) {

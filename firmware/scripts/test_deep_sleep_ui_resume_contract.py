@@ -47,9 +47,13 @@ for declaration in (
     r"RTC_DATA_ATTR\s+static\s+uint8_t\s+s_ui_help_page\s*;",
     r"RTC_DATA_ATTR\s+static\s+uint8_t\s+s_ui_info_page\s*;",
     r"RTC_DATA_ATTR\s+static\s+float\s+s_ui_batch_amount\s*=\s*DURA_AUTO_BATCH_DEFAULT_GAL\s*;",
+    r"RTC_DATA_ATTR\s+static\s+float\s+s_ui_auto_amount_gal\s*=\s*DURA_AUTO_BATCH_DEFAULT_GAL\s*;",
+    r"RTC_DATA_ATTR\s+static\s+float\s+s_ui_recirc_amount_gal\s*=\s*DURA_RECIRC_BATCH_DEFAULT_GAL\s*;",
+    r"RTC_DATA_ATTR\s+static\s+bool\s+s_ui_batch_is_recirc\s*;",
+    r"RTC_DATA_ATTR\s+static\s+dura_units_t\s+s_ui_batch_units\s*=\s*DURA_UNITS_GALLON\s*;",
     r"RTC_DATA_ATTR\s+static\s+float\s+s_ui_cal_measured_amount\s*;",
     r"RTC_DATA_ATTR\s+static\s+bool\s+s_ui_cal_measured_amount_valid\s*;",
-    r"RTC_DATA_ATTR\s+static\s+uint8_t\s+s_ui_quick_ref\s*=\s*17u\s*;",
+    r"RTC_DATA_ATTR\s+static\s+uint8_t\s+s_ui_quick_ref\s*=\s*DURA_QUICK_CAL_DEFAULT\s*;",
 ):
     require(re.search(declaration, board) is not None, f"UI state is not RTC-retained: {declaration}")
 

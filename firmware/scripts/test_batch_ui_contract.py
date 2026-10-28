@@ -104,7 +104,7 @@ render_run = extract_function(board_source, "render_batch_run")
 for text in (
     '"Press Start to begin."',
     '"Press Stop to end."',
-    '"Home"',
+    '"Back"',
     '"Stop"',
     '"Start"',
     "meter->remaining_batch",
@@ -113,7 +113,7 @@ for text in (
 run_call = re.sub(r"\s+", " ", render_run)
 assert re.search(
     r'draw_legacy_menu_screen\("Press Start to begin\.", "Press Stop to end\.", '
-    r'NULL, NULL, NULL, auto_mode \? "Home" : "Stop", NULL, '
+    r'NULL, NULL, NULL, auto_mode \? "Back" : "Stop", NULL, '
     r'auto_mode \? "Stop" : NULL, "Start"\);',
     run_call,
 )
@@ -241,12 +241,11 @@ assert "s_meter.preset_batch_counts -= count;" in record_pulse
 # Editable presets use the shared tenths-step adjuster and customer precision
 # rule: per-unit SDK precision, capped at one above 199.9 by default. The host harness executes
 # the extracted production helpers rather than a Python reimplementation.
-adjuster = extract_function(board_source, "adjust_batch_amount_tenths")
+adjuster = extract_function(board_source, "adjust_batch_amount")
 editable_formatter = extract_function(board_source, "format_editable_batch_amount")
-assert "lroundf" in adjuster
-assert "amount_tenths" in adjuster
-assert "0.1f" not in adjuster
-assert re.search(r"amount_tenths\s*<\s*10", adjuster)
+assert "round((double)amount * scale)" in adjuster
+assert "isfinite(amount)" in adjuster
+assert "next < 0.0" in adjuster
 assert "volume_display_decimals(amount, units)" in editable_formatter
 assert "amount > cutoff && decimals > 1 ? 1 : decimals" in precision
 assert re.search(r'"%\.\*f"', editable_formatter)
@@ -268,15 +267,15 @@ static void check(float actual, float expected, const char *expected_text) {{
     }}
 }}
 int main(void) {{
-    check(adjust_batch_amount_tenths(10.0f, -1), 9.9f, "9.90");
-    check(adjust_batch_amount_tenths(10.0f, 1), 10.1f, "10.10");
-    check(adjust_batch_amount_tenths(1.0f, -1), 1.0f, "1.00");
-    check(adjust_batch_amount_tenths(1.04f, -1), 1.0f, "1.00");
-    check(adjust_batch_amount_tenths(250.0f, 1), 250.1f, "250.1");
+    check(adjust_batch_amount(10.0f, -1, DURA_UNITS_GALLON), 9.99f, "9.99");
+    check(adjust_batch_amount(10.0f, 1, DURA_UNITS_GALLON), 10.01f, "10.01");
+    check(adjust_batch_amount(0.0f, -1, DURA_UNITS_GALLON), 0.0f, "0.00");
+    check(adjust_batch_amount(1.04f, -1, DURA_UNITS_GALLON), 1.03f, "1.03");
+    check(adjust_batch_amount(250.0f, 1, DURA_UNITS_GALLON), 250.01f, "250.0");
     float amount = 10.0f;
     for (int i = 0; i < 10000; ++i) {{
-        amount = adjust_batch_amount_tenths(amount, -1);
-        amount = adjust_batch_amount_tenths(amount, 1);
+        amount = adjust_batch_amount(amount, -1, DURA_UNITS_GALLON);
+        amount = adjust_batch_amount(amount, 1, DURA_UNITS_GALLON);
     }}
     check(amount, 10.0f, "10.00");
     return 0;
@@ -310,8 +309,10 @@ assert re.search(
 )
 
 render_debug = extract_function(board_source, "dura_board_render_debug_screen")
-assert 'render_popup_confirm("BATCH PRESET", "FINISHED")' in render_debug
-assert 'render_popup_confirm("FLOW DETECTION", "ERROR")' in render_debug
+complete_render = extract_switch_case(render_debug, "DURA_UI_BATCH_COMPLETE")
+assert 'render_popup_confirm("BATCH PRESET", "FINISHED", "Back")' in complete_render
+assert 'draw_legacy_buttons(' not in complete_render  # Never overlay a second label.
+assert 'render_popup_confirm("FLOW DETECTION", "ERROR", "Home")' in render_debug
 for mapping in (
     "case DURA_UI_BATCH_SET: render_batch_edit(&meter, false); break;",
     "case DURA_UI_BATCH_RUN: render_batch_run(&meter, false); break;",
@@ -334,7 +335,7 @@ handle_button = extract_function(board_source, "dura_board_handle_button")
 home_case = extract_switch_case(handle_button, "DURA_UI_HOME")
 assert re.search(
     r"b\s*==\s*DURA_BUTTON_BACK.*?dura_meter_set_auto_batch\(true\)\s*==\s*ESP_OK.*?"
-    r"s_ui_screen\s*=\s*DURA_UI_AUTO_BATCH_EDIT\s*;",
+    r"ui_enter_batch_editor\(false, meter.selected_units\);",
     home_case,
     re.DOTALL,
 ), "Home button 4 must enter Auto Batch mode and its edit screen as one transition"
@@ -343,8 +344,8 @@ assert "DURA_UI_BATCH_SET" not in home_case, \
 manual_edit_case = extract_switch_case(handle_button, "DURA_UI_BATCH_SET")
 auto_edit_case = extract_switch_case(handle_button, "DURA_UI_AUTO_BATCH_EDIT")
 for edit_case in (manual_edit_case, auto_edit_case):
-    assert "adjust_batch_amount_tenths(s_ui_batch_amount, -1)" in edit_case
-    assert "adjust_batch_amount_tenths(s_ui_batch_amount, 1)" in edit_case
+    assert "ui_adjust_batch_amount(-1, meter.selected_units)" in edit_case
+    assert "ui_adjust_batch_amount(1, meter.selected_units)" in edit_case
     assert "s_ui_batch_amount -= 1.0f" not in edit_case
     assert "s_ui_batch_amount += 1.0f" not in edit_case
 assert re.search(r"DURA_BUTTON_UP\)\s+s_ui_batch_amount\s*=\s*10\.0f", manual_edit_case)
@@ -352,7 +353,7 @@ assert "dura_meter_start_batch(s_ui_batch_amount)" in manual_edit_case
 assert "dura_meter_start_batch(s_ui_batch_amount)" in auto_edit_case
 auto_case = extract_switch_case(handle_button, "DURA_UI_AUTO_BATCH_RUN")
 assert re.search(r"b\s*==\s*DURA_BUTTON_UP", auto_case)
-assert "ui_cancel_batch_to_home()" in auto_case
+assert "ui_cancel_batch_to_home(true)" in auto_case
 assert re.search(
     r"b\s*==\s*DURA_BUTTON_SELECT.*?DURA_BATCH_RUNNING.*?dura_meter_pause_batch\(\)",
     auto_case,
@@ -366,13 +367,13 @@ assert re.search(
 assert "DURA_BUTTON_DOWN" not in auto_case
 # Home now applies to every state, not only RUNNING/PAUSED. The helper's
 # safe-RAM fallback guards below retain rejection/persistence safety.
-assert re.search(r"if\s*\(b == DURA_BUTTON_UP\)\s*\{\s*ui_cancel_batch_to_home\(\);", auto_case)
+assert re.search(r"if\s*\(b == DURA_BUTTON_UP\)\s*\{\s*ui_cancel_batch_to_home\(true\);", auto_case)
 
 complete_case = extract_switch_case(handle_button, "DURA_UI_BATCH_COMPLETE")
-assert "ui_cancel_batch_to_home()" in complete_case
+assert "ui_cancel_batch_to_home(true)" in complete_case
 assert re.search(
     r"if\s*\(\s*b\s*==\s*DURA_BUTTON_UP\s*\)\s*\{\s*"
-    r"ui_cancel_batch_to_home\(\);",
+    r"ui_cancel_batch_to_home\(true\);",
     complete_case,
     re.DOTALL,
 )
@@ -386,7 +387,7 @@ for guard in ("updated.batch_mode == DURA_BATCH_EDIT", "updated.batch_mode == DU
               "updated.operation_mode == DURA_OPERATION_IDLE", "updated.calibration_mode == DURA_CAL_IDLE",
               "!updated.pump_enabled", "updated.recipe_owner_id == 0"):
     assert guard in fallback_branch
-assert "ui_go_main();" in fallback_branch
+assert "ui_enter_batch_editor(recirc, updated.selected_units);" in fallback_branch
 go_main = extract_function(board_source, "ui_go_main")
 assert "dura_meter_set_screen_home()" in go_main
 assert "s_ui_screen = DURA_UI_MAIN_MENU;" in go_main

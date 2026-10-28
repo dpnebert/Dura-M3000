@@ -626,7 +626,7 @@ static esp_err_t run_self_tests(uint32_t meter_count, char *response, size_t res
     DURA_SELF_TEST_CHECK("CFG-DEFAULT", meter.meter_timeout_sec == 20u &&
                          meter.backlight_timeout_sec == 10u &&
                          meter.selected_language == DURA_LANGUAGE_ENGLISH && !meter.reset_to_zero &&
-                         meter.selected_precal_profile == 0u && meter.quick_cal_reference == 17u &&
+                         meter.selected_precal_profile == 0u && meter.quick_cal_reference == 4u &&
                          meter.precal_profiles[0].gallon_per_count > 0.0f &&
                          meter.precal_profiles[1].gallon_per_count == 0.0f);
     err = dura_meter_set_meter_timeout(19u);
@@ -648,7 +648,7 @@ static esp_err_t run_self_tests(uint32_t meter_count, char *response, size_t res
     err = (err == ESP_OK) ? dura_meter_apply_quick_cal(21u) : err;
     DURA_SELF_TEST_CHECK("CFG-QUICK-APPLY", err == ESP_OK && dura_meter_get_snapshot(&meter) == ESP_OK &&
                          meter.quick_cal_reference == 21u &&
-                         meter.working_coefficients.gallon_per_count > meter.precal_profiles[0].gallon_per_count);
+                         meter.working_coefficients.gallon_per_count == meter.precal_profiles[0].gallon_per_count * .83f);
     err = dura_meter_select_precal_profile(1u);
     DURA_SELF_TEST_CHECK("CFG-PROFILE-APPLY", err == ESP_OK && dura_meter_get_snapshot(&meter) == ESP_OK &&
                          meter.selected_precal_profile == 1u &&

@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-EXPECTED_HANDOFF = "M3000-HO-20261008-41"
+EXPECTED_HANDOFF = "M3000-HO-20261026-47"
 project = Path(__file__).resolve().parents[1]
 version_path = project / "version.txt"
 app_path = project / "main/app_main.c"

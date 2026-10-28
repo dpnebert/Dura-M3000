@@ -70,6 +70,8 @@ def generated_production(root):
                    board.index('static uint8_t s_last_valid_reed;')]
     constant = re.search(r'^#define DURA_RECIRC_BATCH_DEFAULT_GAL .*$', board, re.M).group()
     result = ui.group()+'\n'+tables+'\n'+constant+'\n'
+    result += 'static float s_ui_recirc_amount_gal = DURA_RECIRC_BATCH_DEFAULT_GAL;\nstatic bool s_ui_batch_is_recirc;\nstatic dura_units_t s_ui_batch_units = DURA_UNITS_GALLON;\n'
+    result += function(board, 'ui_units_per_gallon')+'\n'
     for name in ('dura_board_button_wake_mask', 'dura_board_flow_wake_mask',
                  'dura_board_combined_wake_mask', 'dura_board_wake_group_from_ext1_status',
                  'apply_meter_outputs', 'dura_board_init'):
