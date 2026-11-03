@@ -35,8 +35,30 @@
 #include "dura_peers.h"
 #include "dura_recipe.h"
 #include "gama_blefob.h"
+#include "dura_wifi_provisioning.h"
+#include "dura_ota.h"
 
 static const char *TAG = "dura_m3000";
+
+static void start_ota_wifi_provisioning(void)
+{
+    ESP_LOGI(TAG, "OTA provisioning gesture accepted; stopping normal BLE");
+    esp_err_t err = gama_blefob_sleep_shutdown();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "normal BLE shutdown failed: %s", esp_err_to_name(err));
+        return;
+    }
+    err = dura_wifi_start_provisioning();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Wi-Fi provisioning start failed: %s", esp_err_to_name(err));
+    }
+}
+
+static void reboot_ota_wifi_provisioning(void)
+{
+    ESP_LOGI(TAG, "OTA provisioning reboot requested");
+    esp_restart();
+}
 
 #ifndef CONFIG_DURA_SERIAL_CONSOLE_STACK_SIZE
 #define CONFIG_DURA_SERIAL_CONSOLE_STACK_SIZE 8192
@@ -1110,6 +1132,7 @@ static esp_err_t dura_execute_command(const char *command, char *response, size_
                  "  help | ?                         Show this screen\n"
                  "  whoami                           Firmware and local meter identity\n"
                  "  provision_info                   Local BLE/app onboarding state\n"
+                 "  wifi_provision_reset             Clear Wi-Fi credentials and reboot\n"
                  "  sanity_check                      Legacy-safe local readiness\n"
                  "  run_tests <meter_count>           Run built-in self checks\n"
                  "\n"
@@ -1138,6 +1161,16 @@ static esp_err_t dura_execute_command(const char *command, char *response, size_
     }
     if (strcmp(command, "provision_info") == 0) {
         return format_provision_info_json(response, response_len);
+    }
+    if (strcmp(command, "wifi_provision_reset") == 0) {
+        err = dura_wifi_reset_provisioning();
+        if (err == ESP_OK) {
+            snprintf(response, response_len, "ok: Wi-Fi credentials cleared; rebooting");
+            vTaskDelay(pdMS_TO_TICKS(250));
+            esp_restart();
+        }
+        snprintf(response, response_len, "error: Wi-Fi provisioning reset failed");
+        return err;
     }
     if (strcmp(command, "feature_matrix") == 0) {
         return format_feature_matrix_json(response, response_len);
@@ -2105,12 +2138,14 @@ static void start_serial_console(void)
         ESP_LOGE(TAG, "serial command console task create failed");
         return;
     }
+
     ESP_LOGI(TAG, "serial command console started stack=%u", (unsigned)DURA_SERIAL_CONSOLE_STACK_SIZE);
 }
 
 void app_main(void)
 {
     init_nvs();
+    ESP_ERROR_CHECK(dura_wifi_init_and_provision());
     ESP_ERROR_CHECK(dura_ui_config_init());
     load_system_assignment();
     log_module_info();
@@ -2164,6 +2199,10 @@ void app_main(void)
 
         ESP_ERROR_CHECK(gama_blefob_init(&ble_config));
 #if CONFIG_DURA_BOARD_ENABLE_HARDWARE_TASK
+        ESP_ERROR_CHECK(dura_board_register_ota_provision_handler(
+            start_ota_wifi_provisioning));
+        ESP_ERROR_CHECK(dura_board_register_ota_reboot_handler(
+            reboot_ota_wifi_provisioning));
         ESP_ERROR_CHECK(dura_board_set_ui_change_callback(
             dura_legacy_ble_ui_change_handler, NULL));
         dura_board_ui_snapshot_t initial_snapshot;

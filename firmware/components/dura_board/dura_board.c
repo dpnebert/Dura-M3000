@@ -54,6 +54,7 @@ static int64_t s_backlight_activity_us;
 static uint64_t s_activity_generation;
 /* Only board_task touches preparation/recovery state and input muxes. */
 static bool s_sleep_requested;
+static bool s_ota_active;
 static bool s_sleep_recovery_pending;
 static uint64_t s_sleep_touched_mask;
 static bool s_sleep_ext1_attempted;
@@ -90,6 +91,17 @@ esp_err_t dura_board_set_ble_connected(bool connected)
     s_last_activity_us = esp_timer_get_time();
     portEXIT_CRITICAL(&s_ui_snapshot_mux);
     return ESP_OK;
+}
+
+void dura_board_set_ota_active(bool active)
+{
+    portENTER_CRITICAL(&s_ui_snapshot_mux);
+    s_ota_active = active;
+    if (active) {
+        s_last_activity_us = esp_timer_get_time();
+        ++s_activity_generation;
+    }
+    portEXIT_CRITICAL(&s_ui_snapshot_mux);
 }
 
 void dura_board_note_activity(void)
@@ -132,6 +144,8 @@ static void update_backlight(void)
 
 RTC_DATA_ATTR static bool s_provisioning_qr_dismissed;
 static bool s_provisioning_qr_rendered;
+static dura_board_ota_provision_handler_t s_ota_provision_handler;
+static dura_board_ota_reboot_handler_t s_ota_reboot_handler;
 static bool s_boost_enabled;
 static char s_provisioning_qr_payload[80];
 
@@ -141,6 +155,18 @@ typedef struct {
     const char *name;
     button_handle_t handle;
 } dura_button_def_t;
+
+esp_err_t dura_board_register_ota_provision_handler(dura_board_ota_provision_handler_t handler)
+{
+    s_ota_provision_handler = handler;
+    return ESP_OK;
+}
+
+esp_err_t dura_board_register_ota_reboot_handler(dura_board_ota_reboot_handler_t handler)
+{
+    s_ota_reboot_handler = handler;
+    return ESP_OK;
+}
 
 static dura_button_def_t s_buttons[] = {
     // Physical switch order on the V2 board is KEY4, KEY3, KEY2, KEY1 from left to right.
@@ -743,6 +769,7 @@ typedef enum {
     DURA_UI_FLOW_ERROR,
     DURA_UI_SETUP_HELP,
     DURA_UI_INFO_SCAN,
+    DURA_UI_OTA_PROVISION,
     DURA_UI_SCREEN_COUNT,
 } dura_ui_screen_t;
 
@@ -1618,6 +1645,26 @@ static void draw_dynamic_qr_to_lcd(esp_qrcode_handle_t qrcode)
     }
 }
 
+static void draw_ota_qr_to_lcd(esp_qrcode_handle_t qrcode)
+{
+    const dura_qr_draw_ctx_t ctx = { .x = 0, .y = 0, .scale = 1, .quiet = 2 };
+    if (qrcode == NULL) return;
+
+    const int modules = esp_qrcode_get_size(qrcode);
+    const int size_px = (modules + (ctx.quiet * 2)) * ctx.scale;
+    dura_lcd_fill_rect(ctx.x, ctx.y, size_px, size_px, false);
+
+    for (int my = 0; my < modules; ++my) {
+        for (int mx = 0; mx < modules; ++mx) {
+            if (esp_qrcode_get_module(qrcode, mx, my)) {
+                dura_lcd_fill_rect(ctx.x + ((mx + ctx.quiet) * ctx.scale),
+                                   ctx.y + ((my + ctx.quiet) * ctx.scale),
+                                   ctx.scale, ctx.scale, true);
+            }
+        }
+    }
+}
+
 static esp_err_t format_provisioning_qr_payload(char *payload, size_t payload_len)
 {
     dura_peers_snapshot_t peers = {0};
@@ -1660,7 +1707,7 @@ static void render_provisioning_qr(void)
 
     esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
     cfg.display_func = draw_dynamic_qr_to_lcd;
-    cfg.max_qrcode_version = 2;
+    cfg.max_qrcode_version = 10;
     cfg.qrcode_ecc_level = ESP_QRCODE_ECC_LOW;
 
     err = esp_qrcode_generate(&cfg, payload);
@@ -1678,6 +1725,23 @@ static void render_provisioning_qr(void)
     draw_legacy_text_aligned('C', 96, 20, "TO ADD", false);
     draw_legacy_text_aligned('C', 96, 32, "METER", false);
     draw_legacy_text_aligned('C', 96, 44, DURA_METER_FIRMWARE_VERSION, false);
+}
+
+static void render_ota_provisioning_qr(void)
+{
+    dura_lcd_clear();
+    esp_log_level_set("QRCODE", ESP_LOG_WARN);
+    esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+    cfg.display_func = draw_ota_qr_to_lcd;
+    cfg.max_qrcode_version = 8;
+    cfg.qrcode_ecc_level = ESP_QRCODE_ECC_LOW;
+    const char *payload =
+        "{\"ver\":\"v1\",\"name\":\"PROV_M3000\","
+        "\"pop\":\"dura-m3000\",\"transport\":\"ble\"}";
+    esp_err_t err = esp_qrcode_generate(&cfg, payload);
+    if (err != ESP_OK) {
+        return;
+    }
 }
 
 static bool should_show_provisioning_qr(const dura_meter_snapshot_t *meter)
@@ -1750,6 +1814,9 @@ esp_err_t dura_board_render_debug_screen(void)
     case DURA_UI_INFO_START: render_info_start(&meter); break;
     case DURA_UI_INFO_SCAN:
         dura_lcd_draw_bitmap_1bpp(0, 0, dura_asset_QRcodeData, 128, 64, true);
+        break;
+    case DURA_UI_OTA_PROVISION:
+        render_ota_provisioning_qr();
         break;
     case DURA_UI_INFO_HELP: render_info_help(); break;
     case DURA_UI_COMPANY: render_company(); break;
@@ -1979,6 +2046,11 @@ static void dura_board_handle_button(dura_button_t b)
 
     // DURA_BUTTON_UP/DOWN/SELECT/BACK are physical B0/B1/B2/B3 left-to-right on Dura M3000.
     switch (s_ui_screen) {
+    case DURA_UI_OTA_PROVISION:
+        if (b == DURA_BUTTON_SELECT && s_ota_reboot_handler != NULL) {
+            s_ota_reboot_handler();
+        }
+        break;
     case DURA_UI_HOME:
         if (b == DURA_BUTTON_UP) {
             s_ui_screen = DURA_UI_MANUAL;
@@ -2293,6 +2365,9 @@ static void board_task(void *arg)
     bool hold_repeat_enabled = false;
     bool main_outside_hold_pending = false;
     bool settings_hold_fired = false;
+    bool ota_hold_pressed = false;
+    bool ota_hold_fired = false;
+    int64_t ota_hold_started_us = 0;
 #if CONFIG_DURA_BOARD_ENABLE_RECIRC_INPUT && !CONFIG_DURA_BOARD_LCD_HOLD_SPLASH_ON_BOOT
     bool recirc_was_pressed = false;
 #endif
@@ -2327,7 +2402,27 @@ static void board_task(void *arg)
         recirc_was_pressed = recirc_pressed;
 #endif
 
+        const int64_t button_sample_us = esp_timer_get_time();
         dura_button_t b = dura_board_poll_button();
+        const bool key2_pressed = gpio_get_level(DURA_GPIO_KEY_2) == DURA_BUTTON_ACTIVE_LEVEL;
+        const bool key3_pressed = gpio_get_level(DURA_GPIO_KEY_3) == DURA_BUTTON_ACTIVE_LEVEL;
+        const bool ota_buttons_pressed = key2_pressed && key3_pressed;
+        if (ota_buttons_pressed && s_ui_screen == DURA_UI_MAIN_MENU &&
+            !ota_hold_pressed && !ota_hold_fired) {
+            ota_hold_pressed = true;
+            ota_hold_started_us = button_sample_us;
+        } else if (!ota_buttons_pressed) {
+            ota_hold_pressed = false;
+            ota_hold_fired = false;
+            ota_hold_started_us = 0;
+        } else if (ota_hold_pressed && !ota_hold_fired &&
+                   button_sample_us - ota_hold_started_us >=
+                       (int64_t)CONFIG_DURA_BOARD_SETTINGS_HOLD_MS * 1000LL) {
+            ota_hold_fired = true;
+            ota_hold_pressed = false;
+            s_ui_screen = DURA_UI_OTA_PROVISION;
+            if (s_ota_provision_handler != NULL) s_ota_provision_handler();
+        }
         /* A held key is activity, including the wake key whose action remains
          * suppressed until release. Never consume an ordinary dark-screen key. */
         if (b != DURA_BUTTON_NONE) dura_board_note_user_activity();
@@ -2337,7 +2432,6 @@ static void board_task(void *arg)
             }
             b = DURA_BUTTON_NONE;
         }
-        const int64_t button_sample_us = esp_timer_get_time();
         if (b != DURA_BUTTON_NONE && b != last_button) {
             button_pressed_us = button_sample_us;
             last_button_repeat_us = button_sample_us;
@@ -2437,6 +2531,7 @@ static void board_task(void *arg)
             ble_connected = s_ble_connected;
             last_activity_us = s_last_activity_us;
             activity_generation = s_activity_generation;
+            bool ota_active = s_ota_active;
             portEXIT_CRITICAL(&s_ui_snapshot_mux);
             const int64_t now_us = esp_timer_get_time();
             const uint64_t inactive_ms = now_us >= last_activity_us
@@ -2453,7 +2548,7 @@ static void board_task(void *arg)
                 .inactive_ms = inactive_ms,
                 .timeout_sec = CONFIG_DURA_BOARD_DEEP_SLEEP_DELAY_SEC,
             };
-            if (dura_control_sleep_allowed(&sleep_input) &&
+            if (!ota_active && dura_control_sleep_allowed(&sleep_input) &&
                 sleep_attempt_current(activity_generation)) {
                 ESP_LOGI(TAG, "deep-sleep delay %u s reached; entering gated deep sleep",
                          (unsigned)CONFIG_DURA_BOARD_DEEP_SLEEP_DELAY_SEC);
@@ -2630,5 +2725,3 @@ esp_err_t dura_board_start(void)
                                 DURA_BOARD_TASK_PRIORITY, &s_task);
     return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
-
-

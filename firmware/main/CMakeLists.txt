@@ -12,6 +12,14 @@ set(dura_main_requires
     esp_driver_gpio
     esp_driver_uart
     spi_flash
+    esp_wifi
+    esp_netif
+    esp_event
+    network_provisioning
+    esp_http_client
+    esp_https_ota
+    bootloader_support
+    esp-tls
 )
 
 if(NOT CONFIG_DURA_APP_QEMU_NO_RADIO)
@@ -19,7 +27,7 @@ if(NOT CONFIG_DURA_APP_QEMU_NO_RADIO)
 endif()
 
 idf_component_register(
-    SRCS "app_main.c"
+    SRCS "app_main.c" "dura_wifi_provisioning.c" "dura_ota.c"
     INCLUDE_DIRS "."
     REQUIRES ${dura_main_requires}
 )

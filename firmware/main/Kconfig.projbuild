@@ -33,4 +33,13 @@ config DURA_APP_QEMU_NO_RADIO
         and use local no-radio peer stubs so app command tests can run end to end.
         Keep disabled for hardware builds.
 
+config DURA_OTA_URL
+        string "Provisioning-screen OTA firmware URL"
+        default "https://dev.danielnebert.com/m3000-ota-test/firmware.bin"
+
+config DURA_OTA_POLL_SECONDS
+        int "OTA endpoint polling interval"
+        range 5 3600
+        default 60
+
 endmenu
