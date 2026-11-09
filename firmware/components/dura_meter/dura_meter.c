@@ -1010,6 +1010,18 @@ esp_err_t dura_meter_reset_calibration(void)
     return err;
 }
 
+esp_err_t dura_meter_discard_calibration_counts(void)
+{
+    METER_LOCK();
+    if (s_meter.calibration_mode != DURA_CAL_RUNNING) {
+        METER_UNLOCK();
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_meter.calibration_counts = 0;
+    METER_UNLOCK();
+    return ESP_OK;
+}
+
 esp_err_t dura_meter_cancel_calibration(void)
 {
     METER_LOCK();

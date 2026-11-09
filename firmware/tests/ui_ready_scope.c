@@ -29,14 +29,27 @@ static void hold_precision(void){
   if(editor==2)s_ui_screen=DURA_UI_BATCH_SET;
   s_ui_batch_amount=10;float tap=step(u),held=tap<.1f?.1f:tap;
   dura_button_t b=sign>0?DURA_BUTTON_SELECT:DURA_BUTTON_DOWN;
+  /* Edge tap stays at the finest count. */
   hardware_button_sample(b);near(s_ui_batch_amount,10+sign*tap);
-  ui_now+=1000000;hardware_button_sample(b);near(s_ui_batch_amount,10+sign*(tap+held));
-  ui_now+=1000000;hardware_button_sample(b);near(s_ui_batch_amount,10+sign*(tap+2*held));
+  /* Stay under 800 ms so hold uses the 0.1-unit stage (or finest if wider).
+   * With max_rate_x=10 the first repeat is due around ~434 ms, so sample at
+   * 500 ms then 750 ms. */
+  ui_now+=500000;hardware_button_sample(b);near(s_ui_batch_amount,10+sign*(tap+held));
+  ui_now+=250000;hardware_button_sample(b);near(s_ui_batch_amount,10+sign*(tap+2*held));
   hardware_button_sample(DURA_BUTTON_NONE);near(s_ui_batch_amount,10+sign*(tap+2*held));
   hardware_button_sample(b);near(s_ui_batch_amount,10+sign*(2*tap+2*held));
   hardware_button_sample(DURA_BUTTON_NONE);
   /* Queued/ordinary dispatch after repeat must remain a fine tap. */
-  dispatch_ui_button(b);near(s_ui_batch_amount,10+sign*(3*tap+2*held));off();
+  dispatch_ui_button(b);near(s_ui_batch_amount,10+sign*(3*tap+2*held));
+  /* Cross into the 1.0-unit stage (>=800 ms): snap onto the grid. */
+  if(tap<0.05f){ /* decimals==2 only: 0.01 taps */
+   s_ui_batch_amount=10.37f;
+   hardware_button_sample(b);near(s_ui_batch_amount,10.37f+sign*tap);
+   ui_now+=1000000;hardware_button_sample(b);
+   near(s_ui_batch_amount,sign<0?10.0f:11.0f);
+   hardware_button_sample(DURA_BUTTON_NONE);
+  }
+  off();
  }
 }
 static void hold_calibration(void){
@@ -164,7 +177,9 @@ static void manual_pixels(void){
   /* Independent narrow golden: baseline composition minus only Power draw,
    * NOT erasing a band (which would destroy previously covered numeric ink). */
   dura_lcd_clear();char text[24];format_legacy_batch_amount(text,sizeof(text),m.meter_total,u);
-  dura_lcd_draw_bitmap_1bpp(0,0,dura_asset_durametertitle_bmp_glcd_bmp,128,8,true);draw_num40_right(128,12,text);
+  /* Cycle 2 (item 2, part-15): 24 pt amount right-aligned at y=15 above the
+   * Flow/units row; Flow and Batch/Total are off in this snapshot. */
+  dura_lcd_draw_bitmap_1bpp(0,0,dura_asset_durametertitle_bmp_glcd_bmp,128,8,true);draw_num24_text((uint8_t)(128-num24_text_width(text)),15,text);
   draw_legacy_text_aligned('R',128,42,unit_label(u),false);draw_legacy_buttons("Home","Reset","Stop","Start");
   CHECK(!memcmp(actual,s_fb,1024));
  }
@@ -189,20 +204,20 @@ static void cal_units(void){for(int u=1;u<=3;u++){
 static void precal(void){
  s_ui_screen=DURA_UI_PRECAL_1;refresh();has("Recall");uint8_t recall[1024];memcpy(recall,s_fb,1024);pixels("precal-recall.pbm");
  s_ui_screen=DURA_UI_CAL_SAVE_1;refresh();has("save your fluid calibration #");CHECK(memcmp(recall,s_fb,1024));pixels("precal-save.pbm");
- s_ui_screen=DURA_UI_PRECAL_1;press(DURA_BUTTON_DOWN);refresh();has("No saved calibration");off();CHECK(s_ui_screen==DURA_UI_MAIN_MENU);
- ui_now+=3000000;refresh();CHECK(!strstr(rendered_text,"No saved calibration"));
- s_ui_screen=DURA_UI_PRECAL_1;fail_commit=1;press(DURA_BUTTON_UP);refresh();has("Save failed");CHECK(!strstr(rendered_text,"Calibration saved"));CHECK(s_ui_screen==DURA_UI_PRECAL_1);off();
+ s_ui_screen=DURA_UI_PRECAL_1;press(DURA_BUTTON_DOWN);refresh();has("Fluid 1 has");has("no saved value");off();CHECK(s_ui_screen==DURA_UI_MAIN_MENU); /* cycle-1 wording */
+ ui_now+=3000000;refresh();CHECK(!strstr(rendered_text,"no saved value"));
+ s_ui_screen=DURA_UI_PRECAL_1;fail_commit=1;press(DURA_BUTTON_UP);refresh();has("Save failed");CHECK(!strstr(rendered_text,"a new saved value"));CHECK(s_ui_screen==DURA_UI_PRECAL_1);off();
 }
 static void cal_feedback(void){
  press(DURA_BUTTON_DOWN);press(DURA_BUTTON_DOWN);CHECK(snap().calibration_mode==DURA_CAL_RUNNING);
- press(DURA_BUTTON_BACK);refresh();has("Not enough flow");CHECK(snap().calibration_mode==DURA_CAL_RUNNING);
+ press(DURA_BUTTON_BACK);refresh();has("Not enough fluid");has("flow detected"); /* cycle-1 wording */CHECK(snap().calibration_mode==DURA_CAL_RUNNING);
  /* Overlay never blocks Cancel while pump is on. */
  press(DURA_BUTTON_UP);off();CHECK(snap().calibration_mode==DURA_CAL_IDLE);
  press(DURA_BUTTON_DOWN);CHECK(dura_meter_record_pulse(DURA_MIN_FLOW_COUNTS)==ESP_OK);press(DURA_BUTTON_BACK);refresh();has("Cal Counts");char n[16];snprintf(n,sizeof(n),"%u",DURA_MIN_FLOW_COUNTS);has(n);off();pixels("cal-counts.pbm");
  ui_now+=3000000;refresh();CHECK(!strstr(rendered_text,"Cal Counts"));CHECK(s_ui_screen==DURA_UI_CAL_ADJUST);
  press(DURA_BUTTON_BACK);CHECK(s_ui_screen==DURA_UI_CAL_SAVE_1);
- for(int f=1;f<=3;f++){fail_open=f==1;fail_write=f==2;fail_commit=f==3;press(DURA_BUTTON_DOWN);refresh();has("Save failed");CHECK(!strstr(rendered_text,"Calibration saved"));CHECK(s_ui_screen==DURA_UI_CAL_SAVE_1);off();}
- fail_open=fail_write=fail_commit=0;press(DURA_BUTTON_DOWN);refresh();has("Calibration saved");has("Fluid1");off();CHECK(s_ui_screen==DURA_UI_MAIN_MENU);
+ for(int f=1;f<=3;f++){fail_open=f==1;fail_write=f==2;fail_commit=f==3;press(DURA_BUTTON_DOWN);refresh();has("Save failed");CHECK(!strstr(rendered_text,"a new saved value"));CHECK(s_ui_screen==DURA_UI_CAL_SAVE_1);off();}
+ fail_open=fail_write=fail_commit=0;press(DURA_BUTTON_DOWN);refresh();has("Fluid 1 has");has("a new saved value"); /* cycle-1 wording */off();CHECK(s_ui_screen==DURA_UI_MAIN_MENU);
 }
 static void quick(void){
  s_ui_screen=DURA_UI_QUICK_CAL;refresh();has("Product names for");has("reference only!");pixels("quick.pbm");

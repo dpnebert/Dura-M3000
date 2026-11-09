@@ -34,7 +34,7 @@ def main() -> int:
             "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
             "-I", str(include_dir),
             str(PROJECT / "tests/dura_ui_behavior_host.c"),
-            str(behavior_source), "-o", str(binary),
+            str(behavior_source), "-lm", "-o", str(binary),
         ]
         print("+ " + " ".join(command), flush=True)
         subprocess.run(command, check=True)
@@ -57,10 +57,17 @@ def main() -> int:
     for marker in (
         "dura_ui_battery_percent_visible",
         "dura_ui_button_repeat_interval_ms",
+        "dura_ui_adjust_editable_amount",
+        "s_ui_repeat_held_ms",
         "ui_button_is_repeatable",
         "esp_timer_get_time",
     ):
         require(marker in board_source, f"board integration missing {marker}")
+    require("Cal Counts" in board_source, "Cal Counts notice label missing")
+    require("Cal County" not in board_source, "unexpected Cal County typo present")
+    require("dura_lcd_clear();" in board_source, "full-frame clear before render missing")
+    require("DURA_UI_HOLD_STEP_TENTHS_MS" in (PROJECT / "components/dura_board/include/dura_ui_behavior.h").read_text(encoding="utf-8"),
+            "hold step stage constants missing")
 
     persistence = config_source.read_text(encoding="utf-8")
     for marker in ("nvs_open", "nvs_get_blob", "nvs_set_blob", "nvs_commit"):

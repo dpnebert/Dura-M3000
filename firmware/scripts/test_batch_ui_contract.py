@@ -98,34 +98,30 @@ def extract_switch_case(function: str, label: str) -> str:
     return function[start:i]
 
 
-# Exact legacy/customer composition: two captions, large remaining amount,
-# singular unit at the right edge, and Home / blank / Stop / Start softkeys.
+# Cycle 2 (OWNER_UPDATE_NATIVE item 2, part-16): the operating screen shows
+# the remaining amount in the 40 pt digits with the Flow/units row; the
+# "Press Start to begin." heading is replaced. Softkeys are unchanged.
 render_run = extract_function(board_source, "render_batch_run")
-for text in (
-    '"Press Start to begin."',
-    '"Press Stop to end."',
-    '"Back"',
-    '"Stop"',
-    '"Start"',
-    "meter->remaining_batch",
-):
+for text in ('"Back"', '"Stop"', '"Start"', "render_operating_amount(meter);"):
     assert text in render_run, f"batch run renderer missing {text}"
+for retired in ('"Press Start to begin."', '"Press Stop to end."'):
+    assert retired not in render_run, f"retired heading remains: {retired}"
 run_call = re.sub(r"\s+", " ", render_run)
 assert re.search(
-    r'draw_legacy_menu_screen\("Press Start to begin\.", "Press Stop to end\.", '
-    r'NULL, NULL, NULL, auto_mode \? "Back" : "Stop", NULL, '
+    r'draw_legacy_buttons\(auto_mode \? "Back" : "Stop", NULL, '
     r'auto_mode \? "Stop" : NULL, "Start"\);',
     run_call,
 )
 for diagnostic in ('"Batch Mode"', '"Dispensing"', '"Remaining ', '"Pump ON"', '"Pump OFF"'):
     assert diagnostic not in render_run, f"diagnostic composition remains in batch run renderer: {diagnostic}"
 
-render_amount = extract_function(board_source, "render_legacy_batch_amount")
-assert re.search(r"draw_num24_text\s*\(\s*2\s*,\s*26\s*,", render_amount)
-assert re.search(
-    r"draw_legacy_text_aligned\s*\(\s*'R'\s*,\s*128\s*,\s*40\s*,",
-    render_amount,
-)
+render_amount = extract_function(board_source, "render_operating_amount")
+assert "meter->remaining_batch" in render_amount
+assert re.search(r"draw_num40_right\s*\(\s*128\s*,\s*1\s*,", render_amount)
+assert "draw_operating_flow_and_units(meter);" in render_amount
+flow_row = extract_function(board_source, "draw_operating_flow_and_units")
+assert re.search(r"draw_legacy_text_aligned\s*\(\s*'R'\s*,\s*128\s*,\s*42\s*,\s*unit_label", flow_row)
+assert "meter->show_flow_rate" in flow_row
 
 unit_label = extract_function(board_source, "legacy_batch_unit_label")
 for unit in ('"Gallon"', '"Litre"', '"Ounce"'):

@@ -47,7 +47,7 @@ def check_customer_title(project: Path) -> None:
 #define DURA_LCD_WIDTH 128
 #define DURA_LCD_HEIGHT 64
 static uint8_t s_fb[1024];
-typedef struct { float meter_total; int selected_units; } dura_meter_snapshot_t;
+typedef struct { float meter_total; int selected_units; bool show_batch_total; } dura_meter_snapshot_t;
 typedef struct { bool valid; unsigned percent; } dura_battery_measurement_t;
 static bool battery_valid;
 dura_battery_measurement_t dura_battery_get_measurement(void) {
@@ -56,11 +56,18 @@ dura_battery_measurement_t dura_battery_get_measurement(void) {
 static void format_legacy_batch_amount(char *s, size_t n, float v, int u) {
     (void)v; (void)u; snprintf(s,n,"1.00");
 }
-static void draw_num40_right(int x,int y,const char *s) {(void)x;(void)y;(void)s;}
-static void draw_legacy_text_aligned(char a,int x,int y,const char *s,bool i) {
+/* Cycle 2: Manual uses 24 pt digits plus the Flow/units row; with
+ * Batch/Total off (this oracle) the genuine title is still drawn. */
+#define UNUSED __attribute__((unused))
+static UNUSED void draw_num40_right(int x,int y,const char *s) {(void)x;(void)y;(void)s;}
+static UNUSED void draw_num24_text(int x,int y,const char *s) {(void)x;(void)y;(void)s;}
+static UNUSED uint8_t num24_text_width(const char *s) {(void)s;return 40;}
+static UNUSED void draw_operating_flow_and_units(const dura_meter_snapshot_t *m) {(void)m;}
+static UNUSED void draw_manual_batch_total_header(const dura_meter_snapshot_t *m) {(void)m;}
+static UNUSED void draw_legacy_text_aligned(char a,int x,int y,const char *s,bool i) {
     (void)a;(void)x;(void)y;(void)s;(void)i;
 }
-static const char *unit_label(int u) {(void)u;return "gal";}
+static UNUSED const char *unit_label(int u) {(void)u;return "gal";}
 static void draw_legacy_buttons(const char *a,const char *b,const char *c,const char *d) {
     (void)a;(void)b;(void)c;(void)d;
 }
@@ -68,7 +75,7 @@ static void draw_legacy_buttons(const char *a,const char *b,const char *c,const 
     # Link real assets rather than inventing an identically named fake array.
     harness = prelude + c_function(lcd, "dura_lcd_set_pixel") + "\n" + c_function(lcd, "dura_lcd_draw_bitmap_1bpp") + "\n" + manual + r'''
 int main(void) {
-    dura_meter_snapshot_t meter = {1.0f, 0};
+    dura_meter_snapshot_t meter = {1.0f, 0, false};
     for (int valid=0; valid<2; ++valid) {
         battery_valid = valid;
         memset(s_fb,0,sizeof(s_fb));

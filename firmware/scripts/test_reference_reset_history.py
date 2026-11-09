@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import re
 
 MODES = ('idle', 'manual', 'auto', 'recirc', 'calibration', 'recipe', 'paused', 'fault', 'sleep')
 TESTS = [f'factory_active_{mode}' for mode in MODES]
@@ -22,6 +23,62 @@ TESTS += [f'{which}_ingress' for which in ('factory', 'batch', 'total')]
 CHARACTERIZATIONS = ['characterize_rate', 'characterize_rounding']
 
 
+def item1_reset_ui_persistence_preservation(root):
+    """Exercise factory reset at setup item 9 + DOWN, not the item-3 totals reset."""
+    board = (root/'components/dura_board/dura_board.c').read_text(encoding='utf-8')
+    meter = (root/'components/dura_meter/dura_meter.c').read_text(encoding='utf-8')
+    handler = extract_function(board, 'handle_setup_button')
+    assert handler, 'setup button handler is missing'
+    item8 = re.search(r's_ui_setup_item == 8u && b == DURA_BUTTON_DOWN[^}]*?s_ui_setup_item = 9u;', handler, re.S)
+    item9 = re.search(
+        r's_ui_setup_item == 9u && b == DURA_BUTTON_DOWN[^}]*?'
+        r'dura_meter_factory_defaults\(\).*?dura_meter_save\(\).*?ui_go_home\(\);',
+        handler, re.S)
+    assert item8, 'setup item 8 does not advance to factory-reset confirmation item 9'
+    assert item9, 'setup item 9 + DOWN does not factory-default, save, and return home'
+    defaults = extract_function(meter, 'dura_meter_factory_defaults')
+    save = extract_function(meter, 'dura_meter_save')
+    assert defaults, 'dura_meter_factory_defaults() is missing'
+    assert save, 'dura_meter_save() is missing'
+    print('ITEM1_FACTORY_RESET_UI_PERSISTENCE_ORACLE_PASS')
+
+
+def preserve_total_reset_coverage(root):
+    """Keep the separate item-3 total-reset regression coverage intact."""
+    board = (root/'components/dura_board/dura_board.c').read_text(encoding='utf-8')
+    meter = (root/'components/dura_meter/dura_meter.c').read_text(encoding='utf-8')
+    reset = extract_function(board, 'reset_current_total')
+    assert reset, 'reset screen has no reset_current_total handler'
+    assert 'case DURA_UI_RESET_TOTALS:' in board
+    assert 'else if (b == DURA_BUTTON_DOWN) reset_current_total();' in board
+    assert 'dura_meter_reset_meter_total()' in reset
+    assert 'dura_meter_reset_batch_total()' in reset
+    assert 'dura_meter_reset_total_total()' in reset
+    for name in ('dura_meter_reset_meter_total', 'dura_meter_reset_batch_total',
+                 'dura_meter_reset_total_total'):
+        match = extract_function(meter, name)
+        assert match, name + ' is missing'
+        assert 'dura_meter_save()' in match, name + ' does not persist by production save path'
+    print('ITEM1_TOTAL_RESET_PRESERVATION_PASS')
+
+
+def extract_function(source, name):
+    match = re.search(r'(?:^|\n)[^\n;]*\b' + re.escape(name) + r'\s*\([^;]*?\)\s*\{', source)
+    if not match:
+        return None
+    start = source.find('{', match.start())
+    depth, end = 0, start
+    while end < len(source):
+        if source[end] == '{':
+            depth += 1
+        elif source[end] == '}':
+            depth -= 1
+            if depth == 0:
+                return source[match.start():end + 1]
+        end += 1
+    return None
+
+
 def main():
     here = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -30,6 +87,8 @@ def main():
     parser.add_argument('--test', choices=TESTS + CHARACTERIZATIONS, action='append')
     args = parser.parse_args()
     root, out = args.source_root.resolve(), args.out.resolve()
+    item1_reset_ui_persistence_preservation(root)
+    preserve_total_reset_coverage(root)
     out.mkdir(parents=True, exist_ok=False)  # Fail closed: never overwrite RED/GREEN.
     inputs = [root/'components/dura_meter/dura_meter.c',
               root/'components/dura_meter/dura_control_policy.c',

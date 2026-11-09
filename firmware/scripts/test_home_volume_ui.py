@@ -17,9 +17,24 @@ UNITS = ('GALLON', 'LITER', 'OUNCE')
 
 
 def config_defines(root=ROOT):
-    return '\n'.join('#define ' + line.replace('=', ' ', 1)
+    defines = '\n'.join('#define ' + line.replace('=', ' ', 1)
                      for line in (root/'sdkconfig').read_text().splitlines()
                      if line.startswith('CONFIG_DURA_BOARD_VOLUME_')) + '\n'
+    values = dict(re.findall(r'^(CONFIG_DURA_BOARD_GPIO_KEY_[1-4]|CONFIG_DURA_BOARD_BUTTON_ACTIVE_LOW)=(.*)$',
+                             (root/'sdkconfig').read_text(), re.M))
+    active_low = values.get('CONFIG_DURA_BOARD_BUTTON_ACTIVE_LOW', 'n') in ('y', '1')
+    defines += '#ifndef DURA_BUTTON_ACTIVE_LEVEL\n#define DURA_BUTTON_ACTIVE_LEVEL '+('0' if active_low else '1')+'\n#endif\n'
+    key_defaults = {'KEY_1': '6', 'KEY_2': '7', 'KEY_3': '5', 'KEY_4': '4'}
+    for name, default in key_defaults.items():
+        config = 'CONFIG_DURA_BOARD_GPIO_'+name
+        value = values.get(config, default)
+        defines += '#ifndef '+config+'\n#define '+config+' '+value+'\n#endif\n'
+    defines += '#ifndef DURA_GPIO_KEY_1\n#define DURA_GPIO_KEY_1 ((gpio_num_t)CONFIG_DURA_BOARD_GPIO_KEY_1)\n#endif\n'
+    defines += '#ifndef DURA_GPIO_KEY_2\n#define DURA_GPIO_KEY_2 ((gpio_num_t)CONFIG_DURA_BOARD_GPIO_KEY_2)\n#endif\n'
+    defines += '#ifndef DURA_GPIO_KEY_3\n#define DURA_GPIO_KEY_3 ((gpio_num_t)CONFIG_DURA_BOARD_GPIO_KEY_3)\n#endif\n'
+    defines += '#ifndef DURA_GPIO_KEY_4\n#define DURA_GPIO_KEY_4 ((gpio_num_t)CONFIG_DURA_BOARD_GPIO_KEY_4)\n#endif\n'
+    defines += '#ifndef DURA_BUTTON_INACTIVE_LEVEL\n#define DURA_BUTTON_INACTIVE_LEVEL (1-DURA_BUTTON_ACTIVE_LEVEL)\n#endif\n'
+    return defines
 
 
 def generate(root, out):
@@ -28,7 +43,9 @@ def generate(root, out):
     prelude = r'''
 #include "dura_lcd_assets.h"
 #include "dura_battery.h"
+#include "dura_qr_help.h"
 #include "esp_log.h"
+#include "esp_err.h"
 #define RTC_DATA_ATTR
 #define DURA_LCD_WIDTH 128
 #define DURA_LCD_HEIGHT 64
@@ -42,6 +59,13 @@ static uint8_t s_fb[1024];
 static bool s_provisioning_qr_dismissed, s_provisioning_qr_rendered;
 static char s_provisioning_qr_payload[80];
 static char labels[4][32], rendered_amount[32];
+typedef esp_err_t (*dura_board_ota_provision_handler_t)(void);
+typedef void (*dura_board_ota_reboot_handler_t)(void);
+static dura_board_ota_provision_handler_t s_ota_provision_handler;
+static dura_board_ota_reboot_handler_t s_ota_reboot_handler;
+static bool s_ota_active;
+static uint32_t s_healthy_cycles;
+static bool s_ignore_buttons_until_release;
 static bool quantity_pixels;
 static unsigned clipped_foreground, quantity_foreground;
 static int qminx, qmaxx, qminy, qmaxy;
@@ -57,6 +81,16 @@ int dura_lcd_flush(void){return ESP_OK;}
             'dura_battery_measurement_t dura_battery_get_measurement').replace(
             'static bool dura_battery_format_voltage', 'bool dura_battery_format_voltage')
     prelude += enum((root/'components/dura_board/include/dura_board.h').read_text(), 'dura_button_t')+'\n'
+    prelude += r'''
+#ifndef GPIO_NUM_NVS
+typedef enum { GPIO_NUM_NVS = -1 } gpio_num_t;
+#endif
+int gpio_get_level(gpio_num_t pin);
+int gpio_get_level(gpio_num_t pin) {
+    (void)pin;
+    return DURA_BUTTON_INACTIVE_LEVEL;
+}
+'''
     prelude += board[board.index('typedef enum {\n    DURA_UI_MAIN_MENU'):board.index('static bool s_low_battery_blink_active;')]
     prelude += function(lcd, 'dura_lcd_clear')+'\n'
     # Observe pixel requests before the actual clipping implementation, not a replacement renderer.
@@ -93,6 +127,11 @@ static void draw_num24_text(uint8_t x,uint8_t y,const char *text) {
 }
 '''
     # Whole render region includes formatting selectors added in production later.
+    # Hold-step helper must be visible before the render slice pulls ui_adjust_batch_amount.
+    prelude += '#include "dura_ui_behavior.h"\n'
+    behavior = (root/'components/dura_board/dura_ui_behavior.c').read_text()
+    prelude += function(behavior, 'dura_ui_button_repeat_interval_ms')+'\n'
+    prelude += function(behavior, 'dura_ui_adjust_editable_amount')+'\n'
     render = board[board.index('static uint8_t legacy_font_char_width'):board.index('typedef struct {\n    int x;')]
     # Observe text without replacing the production pixel/font chain.
     prelude += 'static char rendered_text[8192];\n'
@@ -115,7 +154,7 @@ static void observed_button(int slot,const char *label) {
 '''
     # Real QR failure render path; QR/peer SDK services alone are injected.
     prelude += r'''
-typedef void *esp_qrcode_handle_t;
+typedef const uint8_t *esp_qrcode_handle_t;
 typedef struct {void (*display_func)(esp_qrcode_handle_t);int max_qrcode_version,qrcode_ecc_level;} esp_qrcode_config_t;
 #define ESP_QRCODE_CONFIG_DEFAULT() ((esp_qrcode_config_t){0})
 #define ESP_QRCODE_ECC_LOW 0
@@ -124,10 +163,18 @@ static int qr_error;
 static int format_provisioning_qr_payload(char *p,size_t n){snprintf(p,n,"host");return qr_error==1?ESP_FAIL:ESP_OK;}
 static void draw_dynamic_qr_to_lcd(esp_qrcode_handle_t q){(void)q;}
 static void esp_log_level_set(const char*s,int l){(void)s;(void)l;}
-static int esp_qrcode_generate(const esp_qrcode_config_t*c,const char*p){(void)c;(void)p;return ESP_FAIL;}
+static int esp_qrcode_generate(const esp_qrcode_config_t*c,const char*p){(void)p;if(qr_error)return ESP_FAIL;if(c&&c->display_func)c->display_func((esp_qrcode_handle_t)1);return ESP_OK;}
+static int esp_qrcode_get_size(esp_qrcode_handle_t qrcode) {(void)qrcode;return 21;}
+static bool esp_qrcode_get_module(esp_qrcode_handle_t qrcode, int x, int y) {(void)qrcode;return ((x + y) & 1) == 0;}
 static size_t strlcpy(char*d,const char*s,size_t n){snprintf(d,n,"%s",s);return strlen(s);}
 '''
+    qr_ctx = re.search(r'typedef struct \{[^{}]*int x;[^{}]*int y;[^{}]*int scale;[^{}]*int quiet;[^{}]*\} dura_qr_draw_ctx_t;', board, re.S)
+    if not qr_ctx:
+        raise ValueError('missing production QR draw context')
+    prelude += qr_ctx.group(0)+'\n'
+    prelude += 'static int s_ota_qr_size_px;\n' + function(board,'draw_ota_qr_to_lcd')+'\n'
     prelude += function(board,'render_provisioning_qr')+'\n'
+    prelude += function(board,'render_ota_provisioning_qr')+'\n'
     prelude += function(board,'should_show_provisioning_qr')+'\n'
     names = ('dura_board_render_debug_screen','ui_go_main','ui_go_home',
              'ui_cancel_calibration_to_start')
@@ -157,15 +204,17 @@ esp_err_t dura_ui_config_get(dura_ui_runtime_config_t *c){
     memset(c,0,sizeof(*c));c->button_hold_max_rate_x=10;return ESP_OK;
 }
 '''
-    prelude += function((root/'components/dura_board/dura_ui_behavior.c').read_text(), 'dura_ui_button_repeat_interval_ms')+'\n'
     prelude += function(board,'ui_button_is_repeatable')+'\n'
     prelude += function(board,'dispatch_ui_button')+'\n'
+    if re.search(r'static bool handle_ota_gesture\(', board):
+        prelude += function(board, 'handle_ota_gesture')+'\n'
     if 'static void dispatch_ui_button_repeat(' in board:
         prelude += function(board,'dispatch_ui_button_repeat')+'\n'
     task = function(board,'board_task')
     state = task[task.index('    dura_button_t last_button'):task.index('#if CONFIG_DURA_BOARD_ENABLE_RECIRC_INPUT')]
     state = re.sub(r'^    (dura_button_t|int64_t|bool) ',r'    static \1 ',state,flags=re.M)
     branch = task[task.index('        const int64_t button_sample_us'):task.index('        last_button = b;')+len('        last_button = b;')]
+    branch = branch.replace('        dura_button_t b = dura_board_poll_button();\n', '')
     prelude += '\nstatic void hardware_button_sample(dura_button_t b){\n'+state+branch+'\n}\n'
     (out/'board_home_volume.inc').write_text(prelude)
 
@@ -187,14 +236,15 @@ def main():
             macros={f'CONFIG_DURA_BOARD_VOLUME_{u}_DECIMALS':2 for u in UNITS}
             macros[f'CONFIG_DURA_BOARD_VOLUME_{unit}_DECIMALS']=decimals
             macros['CONFIG_DURA_BOARD_VOLUME_2DP_LIMIT_TENTHS']=1999
-            configs[f'{unit.lower()}-{decimals}']='\n'.join(f'#define {k} {v}' for k,v in macros.items())+'\n'
-    configs['cutoff-99.9']='\n'.join(f'#define CONFIG_DURA_BOARD_VOLUME_{u}_DECIMALS 2' for u in UNITS)+'\n#define CONFIG_DURA_BOARD_VOLUME_2DP_LIMIT_TENTHS 999\n'
+            configs[f'{unit.lower()}-{decimals}']=normal+'\n'.join(f'#define {k} {v}' for k,v in macros.items())+'\n'
+    configs['cutoff-99.9']=normal+'\n'.join(f'#define CONFIG_DURA_BOARD_VOLUME_{u}_DECIMALS 2' for u in UNITS)+'\n#define CONFIG_DURA_BOARD_VOLUME_2DP_LIMIT_TENTHS 999\n'
     configs['qr-failures']=normal+'#define CONFIG_DURA_APP_M3000_LEGACY_ONLY 0\n'
     cases=['home_auto_running','home_auto_paused','home_auto_done','home_auto_done_noauto',
            'home_recirc_running','home_recirc_paused','home_recirc_done','home_manual',
            'home_flow_error','home_labels','other_buttons','cancel_rejected']
     cases += [f'home_{mode}_{state}_{failure}' for mode in ('auto','recirc')
               for state in ('running','paused','done') for failure in ('open','write','commit')]
+    cases += ['factory_confirmation']
     cases += ['volume','fit']
     results={}
     for config, defines in configs.items():
@@ -214,7 +264,7 @@ def main():
         selected=cases if config=='normal' else (['qr'] if config=='qr-failures' else ['volume','fit'])
         if args.only:selected=[c for c in selected if c.startswith(args.only) or (args.only=='home' and c in ('other_buttons','cancel_rejected','qr'))]
         for case in selected:
-            r=subprocess.run([str(d/'test'),case],capture_output=True,text=True,timeout=20)
+            r=subprocess.run([str(d/'test'),case],cwd=out,capture_output=True,text=True,timeout=20)
             (d/(case+'.log')).write_text(r.stdout+r.stderr)
             results[config+'/'+case]=r.returncode
             print(('PASS ' if not r.returncode else 'FAIL ')+config+'/'+case)

@@ -12,7 +12,8 @@
 extern "C" {
 #endif
 
-#define DURA_METER_FIRMWARE_VERSION "0.1.3"
+/* Sole product firmware version. Change ONLY this for a release; see VERSIONING.md. */
+#define DURA_METER_FIRMWARE_VERSION "0.1.5"
 #define DURA_METER_NVS_NAMESPACE    "dura_meter"
 
 typedef enum {
@@ -138,6 +139,7 @@ esp_err_t dura_meter_start_calibration(void);
 esp_err_t dura_meter_stop_calibration(void);
 esp_err_t dura_meter_continue_calibration(void);
 esp_err_t dura_meter_reset_calibration(void);
+esp_err_t dura_meter_discard_calibration_counts(void);
 esp_err_t dura_meter_cancel_calibration(void);
 esp_err_t dura_meter_accept_calibration_amount(float measured_amount_in_selected_units);
 esp_err_t dura_meter_finish_calibration(uint8_t profile_index);

@@ -69,8 +69,17 @@ def generated_production(root):
     tables = board[board.index('typedef struct {\n    dura_button_t id;'):
                    board.index('static uint8_t s_last_valid_reed;')]
     constant = re.search(r'^#define DURA_RECIRC_BATCH_DEFAULT_GAL .*$', board, re.M).group()
-    result = ui.group()+'\n'+tables+'\n'+constant+'\n'
+    result = ui.group()+'\n'
+    result += 'typedef esp_err_t (*dura_board_ota_provision_handler_t)(void);\n'
+    result += 'typedef void (*dura_board_ota_reboot_handler_t)(void);\n'
+    result += 'static dura_board_ota_provision_handler_t s_ota_provision_handler;\n'
+    result += 'static dura_board_ota_reboot_handler_t s_ota_reboot_handler;\n'
+    result += constant+'\n'
     result += 'static float s_ui_recirc_amount_gal = DURA_RECIRC_BATCH_DEFAULT_GAL;\nstatic bool s_ui_batch_is_recirc;\nstatic dura_units_t s_ui_batch_units = DURA_UNITS_GALLON;\n'
+    result += tables+'\n'
+    for name in ('dura_board_register_ota_provision_handler',
+                 'dura_board_register_ota_reboot_handler'):
+        result += function(board, name)+'\n'
     result += function(board, 'ui_units_per_gallon')+'\n'
     for name in ('dura_board_button_wake_mask', 'dura_board_flow_wake_mask',
                  'dura_board_combined_wake_mask', 'dura_board_wake_group_from_ext1_status',

@@ -24,9 +24,16 @@ menu "Reusable ESP BLE shell"
                 Board/module hardware version or revision. Example: 02, v1.1, RevB.
 
         config BLE_SHELL_FIRMWARE_VERSION
-            string "Firmware version string"
-            default "0.2.0"
-
+            string "Firmware version string (fallback only)"
+            default "UNSET"
+            help
+                Fallback when the application does not pass firmware_version in
+                gama_blefob_config_t. Reusable BLE-shell demos may leave this as
+                UNSET. Dura M3000 product builds MUST set
+                ble_config.firmware_version = DURA_METER_FIRMWARE_VERSION from
+                components/dura_meter/include/dura_meter.h (see app_main). Do not
+                bump this Kconfig for M3000 releases — it cannot override the
+                meter define once the app passes one.
 
         config BLE_SHELL_DEFAULT_SERIAL_ID
             string "Default serial ID before provisioning"

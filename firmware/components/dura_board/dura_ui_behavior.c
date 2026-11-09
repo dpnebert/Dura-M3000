@@ -1,6 +1,7 @@
 #include "dura_ui_behavior.h"
 
 #include <limits.h>
+#include <math.h>
 #include <stdint.h>
 
 bool dura_ui_battery_percent_visible(bool measurement_valid,
@@ -44,4 +45,76 @@ uint32_t dura_ui_button_repeat_interval_ms(uint32_t held_ms,
         interval_ms = 1u;
     }
     return interval_ms > UINT32_MAX ? UINT32_MAX : (uint32_t)interval_ms;
+}
+
+float dura_ui_adjust_editable_amount(float amount,
+                                     int direction,
+                                     bool is_repeat,
+                                     uint32_t held_ms,
+                                     int decimals)
+{
+    if (direction != 1 && direction != -1) {
+        return amount;
+    }
+    if (!isfinite((double)amount) || amount < 0.0f) {
+        amount = 0.0f;
+    }
+    if (decimals < 0) {
+        decimals = 0;
+    }
+    if (decimals > 2) {
+        decimals = 2;
+    }
+
+    const double scale = decimals == 2 ? 100.0 : decimals == 1 ? 10.0 : 1.0;
+    double counts = round((double)amount * scale);
+    const double max_counts = 9999999.0 * scale;
+
+    int step_counts;
+    if (!is_repeat) {
+        step_counts = 1; /* finest: 0.01 when decimals==2 */
+    } else {
+        double unit_step;
+        if (held_ms < DURA_UI_HOLD_STEP_TENTHS_MS) {
+            unit_step = 0.1;
+        } else if (held_ms < DURA_UI_HOLD_STEP_ONES_MS) {
+            unit_step = 1.0;
+        } else {
+            unit_step = 10.0;
+        }
+        step_counts = (int)lround(unit_step * scale);
+        if (step_counts < 1) {
+            step_counts = 1;
+        }
+
+        /* Entering the 1.0 or 10.0 stage: snap onto the stage grid in the
+         * direction of travel so the display lands on a clean multiple. */
+        if (held_ms >= DURA_UI_HOLD_STEP_TENTHS_MS) {
+            const long grid = (long)step_counts;
+            const long cur = (long)counts;
+            if (grid > 0 && (cur % grid) != 0L) {
+                if (direction < 0) {
+                    counts = floor((double)cur / (double)grid) * (double)grid;
+                } else {
+                    counts = ceil((double)cur / (double)grid) * (double)grid;
+                }
+                if (counts < 0.0) {
+                    counts = 0.0;
+                }
+                if (counts > max_counts) {
+                    counts = max_counts;
+                }
+                return (float)(counts / scale);
+            }
+        }
+    }
+
+    counts += (double)direction * (double)step_counts;
+    if (counts < 0.0) {
+        counts = 0.0;
+    }
+    if (counts > max_counts) {
+        counts = max_counts;
+    }
+    return (float)(counts / scale);
 }

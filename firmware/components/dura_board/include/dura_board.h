@@ -215,7 +215,7 @@ typedef enum {
     DURA_BUTTON_BACK,
 } dura_button_t;
 
-typedef void (*dura_board_ota_provision_handler_t)(void);
+typedef esp_err_t (*dura_board_ota_provision_handler_t)(void);
 esp_err_t dura_board_register_ota_provision_handler(dura_board_ota_provision_handler_t handler);
 typedef void (*dura_board_ota_reboot_handler_t)(void);
 esp_err_t dura_board_register_ota_reboot_handler(dura_board_ota_reboot_handler_t handler);
@@ -312,6 +312,8 @@ void dura_board_note_activity(void);
  * independent backlight timer; board owner applies OFF/10–30s policy to GPIO. */
 void dura_board_note_user_activity(void);
 void dura_board_set_ota_active(bool active);
+/* Completed output synchronization, LCD flush and meter snapshot cycles. */
+uint32_t dura_board_healthy_cycles(void);
 esp_err_t dura_board_init_power_sense(void);
 void dura_board_dump_button_io_config(const char *reason);
 bool dura_board_ext_power_present(void);

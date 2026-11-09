@@ -40,18 +40,34 @@
 
 static const char *TAG = "dura_m3000";
 
-static void start_ota_wifi_provisioning(void)
+static esp_err_t start_ota_wifi_provisioning(void)
 {
+    if (!dura_ota_update_allowed()) return ESP_ERR_INVALID_STATE;
+    dura_board_set_ota_active(true);
+    /* Reuse the existing serialized OFF/activation fence. Keep it until
+     * reboot, so Recirc, console and queued commands cannot start a pump. */
+    esp_err_t err = dura_meter_prepare_for_sleep();
+    if (err != ESP_OK) goto reject;
     ESP_LOGI(TAG, "OTA provisioning gesture accepted; stopping normal BLE");
-    esp_err_t err = gama_blefob_sleep_shutdown();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+    err = gama_blefob_sleep_shutdown();
+    if (err != ESP_OK) {
         ESP_LOGE(TAG, "normal BLE shutdown failed: %s", esp_err_to_name(err));
-        return;
+        /* INVALID_STATE can mean a live app link vetoed shutdown. */
+        if (gama_blefob_sleep_resume() != ESP_OK) esp_restart();
+        goto reject;
     }
     err = dura_wifi_start_provisioning();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi provisioning start failed: %s", esp_err_to_name(err));
+        /* Provisioning may partially own NimBLE. A clean boot restores the
+         * normal radio without attempting concurrent host initialization. */
+        esp_restart();
     }
+    return ESP_OK;
+reject:
+    (void)dura_meter_cancel_sleep_prepare();
+    dura_board_set_ota_active(false);
+    return err;
 }
 
 static void reboot_ota_wifi_provisioning(void)
@@ -116,6 +132,8 @@ static void init_nvs(void)
 {
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        /* A trial image must not erase the fallback image's settings. */
+        if (dura_ota_boot_pending()) ESP_ERROR_CHECK(err);
         ESP_ERROR_CHECK(nvs_flash_erase());
         err = nvs_flash_init();
     }
@@ -2142,15 +2160,40 @@ static void start_serial_console(void)
     ESP_LOGI(TAG, "serial command console started stack=%u", (unsigned)DURA_SERIAL_CONSOLE_STACK_SIZE);
 }
 
+static bool controller_boot_healthy(bool normal_ble_started)
+{
+    if (!normal_ble_started || !s_app_command_queue || !s_app_command_reply_queue ||
+        !s_app_command_submit_mutex) return false;
+    const uint32_t first = dura_board_healthy_cycles();
+    unsigned healthy_samples = 0;
+    for (unsigned i = 0; i < 50; ++i) {
+        dura_meter_snapshot_t meter;
+        bool advertising = false, connected = false;
+        bool healthy = dura_meter_get_snapshot(&meter) == ESP_OK &&
+                       !meter.pump_enabled && !meter.fault_latched &&
+                       meter.operation_mode == DURA_OPERATION_IDLE &&
+                       gama_blefob_is_advertising(&advertising) == ESP_OK &&
+                       gama_blefob_is_connected(&connected) == ESP_OK &&
+                       (advertising || connected);
+        healthy_samples = healthy ? healthy_samples + 1 : 0;
+        if (healthy_samples >= 20 && dura_board_healthy_cycles() - first >= 20) {
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    return false;
+}
+
 void app_main(void)
 {
+    ESP_ERROR_CHECK(dura_ota_boot_begin());
     init_nvs();
-    ESP_ERROR_CHECK(dura_wifi_init_and_provision());
     ESP_ERROR_CHECK(dura_ui_config_init());
     load_system_assignment();
     log_module_info();
 
     ESP_ERROR_CHECK(dura_meter_init());
+    if (dura_ota_boot_pending()) ESP_ERROR_CHECK(dura_meter_prepare_for_sleep());
     ESP_ERROR_CHECK(dura_recipe_init());
     ESP_ERROR_CHECK(dura_coordinator_init());
     ESP_ERROR_CHECK(dura_peers_init());
@@ -2171,6 +2214,7 @@ void app_main(void)
     start_app_command_processor();
     start_serial_console();
 
+    bool normal_ble_started = false;
 #if CONFIG_DURA_APP_QEMU_NO_RADIO
     ESP_LOGW(TAG, "QEMU no-radio mode active; BLE shell init skipped");
 #else
@@ -2183,6 +2227,7 @@ void app_main(void)
         ble_config.project_id = "DURA_M3000";
         ble_config.module_name = "Dura-M3000-BLE";
         ble_config.module_version = "proto-0007-0008";
+        /* Single product version source: DURA_METER_FIRMWARE_VERSION (dura_meter.h). */
         ble_config.firmware_version = DURA_METER_FIRMWARE_VERSION;
         ble_config.init_nvs_if_needed = false;
         ble_config.advertise_on_boot = true;
@@ -2198,6 +2243,7 @@ void app_main(void)
         ble_config.disconnected_handler = dura_ble_disconnected_handler;
 
         ESP_ERROR_CHECK(gama_blefob_init(&ble_config));
+        normal_ble_started = true;
 #if CONFIG_DURA_BOARD_ENABLE_HARDWARE_TASK
         ESP_ERROR_CHECK(dura_board_register_ota_provision_handler(
             start_ota_wifi_provisioning));
@@ -2216,6 +2262,16 @@ void app_main(void)
         ESP_LOGI(TAG, "BLE shell and strict legacy Dura binary protocol initialized");
     }
 #endif
+    if (dura_ota_boot_pending()) {
+        const esp_err_t result = dura_ota_boot_finish(controller_boot_healthy(normal_ble_started));
+        if (dura_ota_boot_pending()) ESP_ERROR_CHECK(result);
+        if (result != ESP_OK) ESP_LOGW(TAG, "Wi-Fi cleanup deferred: %s", esp_err_to_name(result));
+        ESP_ERROR_CHECK(dura_meter_cancel_sleep_prepare());
+    } else {
+        /* Cleanup can be retried next boot; it must not crash a valid controller. */
+        const esp_err_t cleanup = dura_ota_boot_finish(true);
+        if (cleanup != ESP_OK) ESP_LOGW(TAG, "Wi-Fi cleanup deferred: %s", esp_err_to_name(cleanup));
+    }
 #if CONFIG_DURA_APP_QEMU_NO_RADIO
     vTaskDelay(portMAX_DELAY);
 #endif

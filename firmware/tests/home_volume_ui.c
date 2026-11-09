@@ -37,6 +37,7 @@ static void refresh(void) {
     memset(labels,0,sizeof(labels));
     CHECK(dura_board_render_debug_screen()==ESP_OK);
 }
+static bool fb_pixel(const uint8_t *fb,int x,int y);
 static void press(dura_button_t b) {dura_board_handle_button(b);}
 static void label_is(int slot,const char *label) {CHECK(!strcmp(labels[slot],label));}
 static void main_menu(void) {
@@ -118,6 +119,54 @@ static void cancellation_rejected(void) {
     int before=s_ui_screen;reject_cancel=true;press(DURA_BUTTON_UP);
     CHECK(s_ui_screen==before && snap().batch_mode==DURA_BATCH_RUNNING);
     reject_cancel=false;press(DURA_BUTTON_UP);CHECK(s_ui_screen==DURA_UI_AUTO_BATCH_EDIT);off();press(DURA_BUTTON_UP);main_menu();
+}
+static void factory_confirmation(void) {
+    s_ui_screen=DURA_UI_SETUP;
+    s_ui_setup_item=8;
+    refresh();
+    press(DURA_BUTTON_DOWN);
+    CHECK(s_ui_setup_item==9);
+    refresh();
+    FILE *frame = fopen("factory_confirmation.pgm", "wb");
+    CHECK(frame != NULL);
+    CHECK(fputs("P5\n128 64\n255\n", frame)>=0);
+    for(int y=0;y<64;y++) {
+        for(int x=0;x<128;x++) {
+            unsigned char pixel=fb_pixel(s_fb,x,y)?0xff:0;
+            CHECK(fputc(pixel,frame)!=EOF);
+        }
+    }
+    CHECK(fclose(frame)==0);
+    CHECK(strstr(rendered_text, "Custom settings are replaced,"));
+    CHECK(strstr(rendered_text, "including saved calibration"));
+    CHECK(strstr(rendered_text, "values. Are you sure?"));
+    label_is(0,"Home");
+    label_is(1,"Yes");
+    label_is(2,"");
+    label_is(3,"Home");
+
+    press(DURA_BUTTON_SELECT);
+    CHECK(s_ui_setup_item==9);
+    CHECK(s_ui_screen==DURA_UI_SETUP);
+
+    press(DURA_BUTTON_UP);
+    CHECK(s_ui_screen==DURA_UI_MAIN_MENU);
+    main_menu();
+
+    s_ui_screen=DURA_UI_SETUP;
+    s_ui_setup_item=8;
+    press(DURA_BUTTON_DOWN);
+    refresh();
+    press(DURA_BUTTON_BACK);
+    CHECK(s_ui_screen==DURA_UI_MAIN_MENU);
+    main_menu();
+
+    s_ui_screen=DURA_UI_SETUP;
+    s_ui_setup_item=8;
+    press(DURA_BUTTON_DOWN);
+    refresh();
+    press(DURA_BUTTON_DOWN);
+    CHECK(s_ui_screen==DURA_UI_MAIN_MENU);
 }
 static int expected_precision(float amount,int unit) {
     const int values[]={0,EXPECT_GAL,EXPECT_LITER,EXPECT_OUNCE};
@@ -225,6 +274,7 @@ int main(int argc,char **argv) {
     else if(!strncmp(name,"home_",5))home_case(name);
     else if(!strcmp(name,"other_buttons"))other_buttons();
     else if(!strcmp(name,"cancel_rejected"))cancellation_rejected();
+    else if(!strcmp(name,"factory_confirmation"))factory_confirmation();
     else if(!strcmp(name,"volume"))quantity_screens();
     else if(!strcmp(name,"fit"))genuine_font_fit();
     else if(!strcmp(name,"qr"))qr_failures();
