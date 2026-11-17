@@ -69,6 +69,7 @@
 #define DURA_LCD_RST_INACTIVE_LEVEL 1
 
 typedef int dura_button_t;
+typedef int gpio_num_t;
 typedef struct {uint64_t pin_bit_mask;int mode,pull_up_en,pull_down_en,intr_type;} gpio_config_t;
 #include "dura_ui_config.h"
 typedef struct {unsigned rd,wr,cap,size; unsigned char data[2048];} queue_t;
@@ -150,7 +151,8 @@ void publish_ui_snapshot(const dura_meter_snapshot_t*m){}
 int dura_board_render_debug_screen(void){return ESP_OK;}
 bool should_show_provisioning_qr(const dura_meter_snapshot_t*m){return false;}
 int dura_ui_config_get(dura_ui_runtime_config_t*c){c->button_hold_max_rate_x=1;return ESP_OK;}
-uint32_t dura_ui_button_repeat_interval_ms(uint32_t t,unsigned r){return t>=1000?100:UINT32_MAX;}
+#include "dura_ui_behavior.h"
+uint32_t dura_ui_button_repeat_interval_ms(uint32_t t,uint8_t r){return t>=1000?100:UINT32_MAX;}
 void dura_lcd_clear(void){}
 int dura_lcd_flush(void){return ESP_OK;}
 int dura_lcd_set_backlight(bool on);

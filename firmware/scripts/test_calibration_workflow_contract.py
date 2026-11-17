@@ -168,7 +168,7 @@ check(bool(re.search(
     normalized_bucket)),
     "bucket Cancel is not UP -> common cancel helper", failures)
 check(bool(re.search(
-    r"else if \(b == DURA_BUTTON_DOWN\) \{ s_ui_help_page = 0u; s_ui_screen = "
+    r"else if \(b == DURA_BUTTON_DOWN\) \{ s_ui_help_page = 0u; .*?dura_meter_discard_calibration_counts\(\); s_ui_screen = "
     r"\(s_ui_screen == DURA_UI_BUCKET_LITER\) \? DURA_UI_CAL_HELP_LITER : DURA_UI_CAL_HELP_GAL; \}",
     normalized_bucket)), "bucket Help is not bound to DOWN", failures)
 check("else if (b == DURA_BUTTON_SELECT) { (void)dura_meter_reset_calibration(); }" in normalized_bucket,
@@ -222,7 +222,7 @@ check(bool(re.search(
 for api in (
     "dura_meter_start_calibration", "dura_meter_stop_calibration",
     "dura_meter_continue_calibration", "dura_meter_reset_calibration",
-    "dura_meter_cancel_calibration",
+    "dura_meter_discard_calibration_counts", "dura_meter_cancel_calibration",
 ):
     check(bool(re.search(rf"\besp_err_t\s+{api}\s*\(\s*void\s*\)\s*;", meter_header)),
           f"missing public calibration API {api}", failures)
@@ -249,6 +249,7 @@ required_functions = (
     (meter_source, "dura_meter_stop_calibration"),
     (meter_source, "dura_meter_continue_calibration"),
     (meter_source, "dura_meter_reset_calibration"),
+    (meter_source, "dura_meter_discard_calibration_counts"),
     (meter_source, "dura_meter_cancel_calibration"),
 )
 if failures:
@@ -481,6 +482,11 @@ int main(void) {{
     require(s_meter.calibration_mode == DURA_CAL_RUNNING && s_meter.pump_enabled &&
             s_meter.calibration_counts == 0u,
             "Reset did not preserve RUNNING/pump-on");
+    s_meter.calibration_counts = 999u;
+    require(dura_meter_discard_calibration_counts() == ESP_OK,
+            "Help count discard failed");
+    require(s_meter.calibration_counts == 0u && s_meter.pump_enabled,
+            "Help count discard changed pump/output state");
     s_meter.calibration_counts = 999u;
     s_meter.pending_calibration.gallon = 1.0f;
     s_meter.pending_calibration.liter = 2.0f;

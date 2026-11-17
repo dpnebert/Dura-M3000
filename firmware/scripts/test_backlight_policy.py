@@ -20,7 +20,30 @@ def generate_board(root, out):
     event = re.search(r'typedef struct\s*\{[^}]*\}\s*dura_flow_event_t;', text).group()
     from test_home_volume_ui import config_defines
     generated = config_defines(root)+ui+'\n'+event+'\n'
-    for name in ('ui_units_per_gallon','ui_enter_batch_editor','ui_sync_batch_units','ui_remember_batch_amount','adjust_batch_amount','ui_adjust_batch_amount','ui_show_notice'):
+    generated += r'''
+typedef esp_err_t (*dura_board_ota_provision_handler_t)(void);
+typedef void (*dura_board_ota_reboot_handler_t)(void);
+int gpio_get_level(int pin);
+'''
+    generated += r'''
+static dura_board_ota_provision_handler_t s_ota_provision_handler;
+static dura_board_ota_reboot_handler_t s_ota_reboot_handler;
+static bool s_ota_active;
+static uint32_t s_healthy_cycles;
+static bool s_ignore_buttons_until_release;
+#ifndef DURA_GPIO_KEY_2
+#define DURA_GPIO_KEY_2 CONFIG_DURA_BOARD_GPIO_KEY_2
+#endif
+#ifndef DURA_GPIO_KEY_3
+#define DURA_GPIO_KEY_3 CONFIG_DURA_BOARD_GPIO_KEY_3
+#endif
+#ifndef DURA_BUTTON_ACTIVE_LEVEL
+#define DURA_BUTTON_ACTIVE_LEVEL 0
+#endif
+'''
+    behavior = (root/'components/dura_board/dura_ui_behavior.c').read_text()
+    generated += '\n'.join(function(behavior, n) for n in ('dura_ui_adjust_editable_amount', 'dura_ui_held_amount'))+'\n'
+    for name in ('ui_units_per_gallon','ui_enter_batch_editor','ui_sync_batch_units','ui_remember_batch_amount','adjust_batch_amount','ui_batch_hold_ramp','ui_adjust_batch_amount','ui_show_notice'):
         generated += function(text,name)+'\n'
     # New helpers are included if present, allowing the identical tests to run RED.
     for name in ['dura_board_set_ble_connected', 'dura_board_note_activity',
@@ -32,7 +55,7 @@ def generate_board(root, out):
                  'ui_cancel_batch_to_home',
                  'dura_board_handle_button', 'ui_button_is_repeatable',
                  'handle_external_recirc_press', 'dura_board_enqueue_button', 'dispatch_ui_button',
-                 'dispatch_ui_button_repeat', 'board_task']:
+                 'dispatch_ui_button_repeat', 'handle_ota_gesture', 'board_task']:
         generated += function(text, name)+'\n'
     generated += function(lcd.read_text(), 'dura_lcd_set_backlight')+'\n'
     generated += function(lcd.read_text(), 'dura_lcd_init')+'\n'

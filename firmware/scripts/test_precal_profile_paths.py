@@ -75,7 +75,14 @@ static void bucket(unsigned slot,unsigned units,float amount) {
     if(slot>=3) ui_button(DURA_BUTTON_BACK);
     ui_button((dura_button_t)(1+slot%3));
     CHECK(s_ui_screen==DURA_UI_MAIN_MENU);
-    CHECK(!strcmp(s_ui_notice_line1,"Calibration saved"));
+    /* Customer text "Fluid X has a new saved value" (space before X), shown
+     * on the two notice rows as in the part-20 reference image. */
+    static const char *const names[6]={"Water","Fluid 1","Fluid 2","Fluid 3","Fluid 4","Fluid 5"};
+    char expected_notice[64],shown[80];
+    snprintf(expected_notice,sizeof(expected_notice),"%s has a new saved value",names[slot]);
+    snprintf(shown,sizeof(shown),"%s %s",s_ui_notice_line1,s_ui_notice_line2);
+    CHECK(!strcmp(shown,expected_notice));
+    CHECK(s_ui_notice_line2[0]!='\0' && !strstr(shown,"(null)"));
     CHECK(snap().selected_precal_profile==slot); off();
 }
 static void recall_ui(unsigned slot) {
@@ -114,7 +121,14 @@ static void empty_slot(unsigned slot) {
     CHECK(write_calls==writes_before); unchanged();
     recall_ui(slot);
     CHECK(s_ui_screen==DURA_UI_MAIN_MENU); /* Retained reference also goes Home. */
-    CHECK(!strcmp(s_ui_notice_line1,"No saved calibration")); unchanged();
+    /* Customer text "Fluid X has no saved value" (space before X), shown on
+     * the two notice rows as in the part-19 reference image. */
+    static const char *const names[6]={"Water","Fluid 1","Fluid 2","Fluid 3","Fluid 4","Fluid 5"};
+    char expected_notice[64],shown[80];
+    snprintf(expected_notice,sizeof(expected_notice),"%s has no saved value",names[slot]);
+    snprintf(shown,sizeof(shown),"%s %s",s_ui_notice_line1,s_ui_notice_line2);
+    CHECK(!strcmp(shown,expected_notice));
+    CHECK(s_ui_notice_line2[0]!='\0' && !strstr(shown,"(null)")); unchanged();
     CHECK(dura_meter_load()==ESP_OK); unchanged();
 }
 static void failure_setup(bool store) {

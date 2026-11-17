@@ -47,7 +47,7 @@
 typedef int gpio_num_t;
 typedef struct {uint64_t pin_bit_mask;int mode,pull_up_en,pull_down_en,intr_type;} gpio_config_t;
 static struct {int gpio;const char *name;} s_buttons[]={{0,"a"},{1,"b"},{2,"c"},{3,"d"}},s_flow_inputs[]={{4,"a"},{5,"b"}};
-static bool s_ble_connected,s_ignore_buttons_until_release,s_sleep_requested,s_sleep_recovery_pending;
+static bool s_ble_connected,s_ignore_buttons_until_release,s_sleep_requested,s_sleep_recovery_pending,s_ota_active;
 static int64_t s_last_activity_us,s_backlight_activity_us,now=1000000000;
 static uint64_t s_activity_generation,s_sleep_touched_mask;
 static bool s_sleep_ext1_attempted;

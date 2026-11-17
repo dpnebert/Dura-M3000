@@ -47,11 +47,13 @@ def main():
     ui = text[text.index('typedef enum {\n    DURA_UI_MAIN_MENU'):text.index('static bool s_low_battery_blink_active;')]
     from test_home_volume_ui import config_defines
     ui = config_defines(root)+ui
+    ui += '\nint gpio_get_level(gpio_num_t pin){(void)pin;return DURA_BUTTON_INACTIVE_LEVEL;}\n'
     render = function(text, 'dura_board_render_debug_screen')
     leaves = sorted(set(re.findall(r'\b(render_\w+|draw_legacy_home)\(', render)))
     preamble = r'''
 #include "esp_log.h"
 #include <math.h>
+#include "dura_ui_behavior.h"
 static void ui_sync_batch_units(dura_units_t units);
 #define RTC_DATA_ATTR
 #define DURA_AUTO_BATCH_DEFAULT_GAL 10
@@ -68,13 +70,17 @@ static void ui_sync_batch_units(dura_units_t units);
 typedef int dura_button_t;
 typedef struct { unsigned button_hold_max_rate_x; } dura_ui_runtime_config_t;
 static bool s_provisioning_qr_rendered, s_provisioning_qr_dismissed;
+static void (*s_ota_reboot_handler)(void);
+static esp_err_t (*s_ota_provision_handler)(void);
+static uint32_t s_healthy_cycles;
+int gpio_get_level(gpio_num_t pin);
 static char s_provisioning_qr_payload[80];
 static jmp_buf owner_done;
 void dura_battery_poll(void){}
 static int queued_test_button;
 int xQueueReceive(void*q,void*v,int t){if(!queued_test_button)return 0;*(int*)v=queued_test_button;queued_test_button=0;return pdTRUE;}
 int dura_ui_config_get(dura_ui_runtime_config_t*c){return ESP_FAIL;}
-uint32_t dura_ui_button_repeat_interval_ms(uint32_t t,unsigned r){return UINT32_MAX;}
+uint32_t dura_ui_button_repeat_interval_ms(uint32_t t,uint8_t r){return UINT32_MAX;}
 void vTaskDelay(unsigned t){longjmp(owner_done,1);}
 bool should_show_provisioning_qr(const dura_meter_snapshot_t*m){return false;}
 void dura_lcd_clear(void){}
@@ -94,8 +100,10 @@ static void dura_lcd_draw_bitmap_1bpp(int x,int y,const uint8_t *p,int w,int h,b
 #define draw_legacy_buttons(...) ((void)0)
 '''
     preamble += '\n'.join('#define '+name+'(...) ((void)0)' for name in leaves)+'\n'
-    helpers = '\n'.join(function(text, n) for n in ['ui_units_per_gallon','ui_enter_batch_editor','ui_sync_batch_units','ui_remember_batch_amount','adjust_batch_amount','ui_adjust_batch_amount','ui_show_notice','ui_go_main', 'ui_go_home', 'ui_cancel_batch_to_home',
-                          'dura_board_handle_button', 'ui_button_is_repeatable', 'dispatch_ui_button', 'dispatch_ui_button_repeat'])
+    behavior = (root/'components/dura_board/dura_ui_behavior.c').read_text()
+    preamble += '\n'.join(function(behavior, n) for n in ('dura_ui_adjust_editable_amount', 'dura_ui_held_amount'))+'\n'
+    helpers = '\n'.join(function(text, n) for n in ['ui_units_per_gallon','ui_enter_batch_editor','ui_sync_batch_units','ui_remember_batch_amount','adjust_batch_amount','ui_batch_hold_ramp','ui_adjust_batch_amount','ui_show_notice','ui_go_main', 'ui_go_home', 'ui_cancel_batch_to_home',
+                          'dura_board_handle_button', 'ui_button_is_repeatable', 'dispatch_ui_button', 'dispatch_ui_button_repeat', 'handle_ota_gesture'])
     cmain = r'''
 static void owner_iteration(void){if(!setjmp(owner_done))board_task(NULL);}
 static void owner_button(int b){CHECK(!queued_test_button);queued_test_button=b;owner_iteration();CHECK(!queued_test_button);}
@@ -161,6 +169,7 @@ int main(int argc,char**argv){
     inputs = [c,root/'components/dura_meter/dura_meter.c',root/'components/dura_meter/dura_control_policy.c']
     cmd = ['cc','-std=c11','-g','-pthread','-fsanitize=undefined',
            '-I'+str(root/'tests/recipe_ownership/include'),'-I'+str(root/'components/dura_meter/include'),
+           '-I'+str(root/'components/dura_board/include'),
            *map(str,inputs),'-lm','-o',str(out/'owner-ui-test')]
     r = subprocess.run(cmd,capture_output=True,text=True)
     (out/'compile.log').write_text(r.stdout+r.stderr)

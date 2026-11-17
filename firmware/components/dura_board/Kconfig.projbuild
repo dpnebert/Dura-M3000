@@ -565,13 +565,113 @@ config DURA_BOARD_LOW_BATTERY_BLINK_OFF_MS
     range 100 60000
     default 1000
 
+menu "Held volume adjustment (gallons / liters / ounces)"
+
+config DURA_BOARD_HOLD_DELAY_MS
+    int "Delay before held-volume movement (ms)"
+    range 100 3000
+    default 400
+    help
+        Auto/Recirc batch-quantity Up/Down only. Each unit has one capped
+        exponential speed curve. Settings are compiled in, not read from NVS.
+        Short taps retain the configured volume decimal precision.
+        Initial press changes one fine step. Further movement starts after
+        this delay. Releasing or reversing the button starts a new gesture.
+
+menu "Gallons"
+
+config DURA_BOARD_HOLD_GALLON_START_CENTI
+    int "Starting speed (0.01 units/second)"
+    range 1 100000
+    default 10
+    help
+        10 means 0.10 selected units/second; 100 means 1.00.
+        Starting speed is limited by the maximum speed below.
+
+config DURA_BOARD_HOLD_GALLON_DOUBLING_MS
+    int "Speed doubling time (ms)"
+    range 100 30000
+    default 1000
+    help
+        Larger means gentler acceleration. 1000 doubles the speed each
+        second after the hold delay, until it reaches the cap.
+
+config DURA_BOARD_HOLD_GALLON_MAX_CENTI
+    int "Maximum speed (0.01 units/second)"
+    range 1 100000
+    default 500
+    help
+        500 means 5.00 selected units/second. Lower this to reduce the
+        maximum scrolling speed. This is quantity/second, not button events.
+
+endmenu
+
+menu "Liters"
+
+config DURA_BOARD_HOLD_LITER_START_CENTI
+    int "Starting speed (0.01 units/second)"
+    range 1 100000
+    default 40
+    help
+        10 means 0.10 selected units/second; 100 means 1.00.
+        Starting speed is limited by the maximum speed below.
+
+config DURA_BOARD_HOLD_LITER_DOUBLING_MS
+    int "Speed doubling time (ms)"
+    range 100 30000
+    default 1000
+    help
+        Larger means gentler acceleration. 1000 doubles the speed each
+        second after the hold delay, until it reaches the cap.
+
+config DURA_BOARD_HOLD_LITER_MAX_CENTI
+    int "Maximum speed (0.01 units/second)"
+    range 1 100000
+    default 2000
+    help
+        500 means 5.00 selected units/second. Lower this to reduce the
+        maximum scrolling speed. This is quantity/second, not button events.
+
+endmenu
+
+menu "Ounces"
+
+config DURA_BOARD_HOLD_OUNCE_START_CENTI
+    int "Starting speed (0.01 units/second)"
+    range 1 100000
+    default 100
+    help
+        10 means 0.10 selected units/second; 100 means 1.00.
+        Starting speed is limited by the maximum speed below.
+
+config DURA_BOARD_HOLD_OUNCE_DOUBLING_MS
+    int "Speed doubling time (ms)"
+    range 100 30000
+    default 1000
+    help
+        Larger means gentler acceleration. 1000 doubles the speed each
+        second after the hold delay, until it reaches the cap.
+
+config DURA_BOARD_HOLD_OUNCE_MAX_CENTI
+    int "Maximum speed (0.01 units/second)"
+    range 1 100000
+    default 5000
+    help
+        500 means 5.00 selected units/second. Lower this to reduce the
+        maximum scrolling speed. This is quantity/second, not button events.
+
+endmenu
+
+endmenu
+
 config DURA_BOARD_BUTTON_HOLD_MAX_RATE_X
-    int "Held-button maximum repeat rate multiplier"
+    int "Non-volume editor held-button repeat multiplier"
     range 1 100
     default 10
     help
-        Held adjustment buttons use rate=max_rate*x/(1+x), where x is the
-        continuous hold duration in seconds. The default asymptote is 10x.
+        Setup/Quick Cal/calibration editors retain rate=max_rate*x/(1+x).
+        This saved runtime setting does NOT affect Auto/Recirc batch-volume
+        adjustment; use the per-unit Held volume adjustment menu above.
 
 config DURA_BOARD_SETTINGS_HOLD_MS
     int "Outside-button hold time for Program Settings (ms)"
