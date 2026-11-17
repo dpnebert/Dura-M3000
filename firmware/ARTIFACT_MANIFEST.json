@@ -1,0 +1,32 @@
+{
+  "packet": "C:/Users/Dan/HermesWork/m3000-copilot-handoff-20261106/candidate-native",
+  "physical_verification": "NOT_RUN",
+  "native_build": "NOT_RUN_MILTON",
+  "artifacts": [
+    "MILTON_HANDOFF.md",
+    "IMPLEMENTATION_REPORT.md",
+    "REGRESSION_RESULTS.md",
+    ".copilot/CUSTOMER_CHECKPOINT.json",
+    ".copilot/OPERATOR_PLAN.json",
+    "native-evidence/authorized-feature-stage-before-20261106T141500Z/BEFORE_SHA256.txt",
+    "native-evidence/authorized-item1-render-green2-20261106T141600Z/results.json",
+    "native-evidence/authorized-item1-reset-handler-green-20261106T141700Z/results.json",
+    "native-evidence/authorized-item4-green2-20261106T141600Z/results.json",
+    "native-evidence/authorized-item4-save-green-20261106T141530Z/results.json",
+    "native-evidence/item1-ui-final-integrated-20261106T141700Z/results.json"
+  ],
+  "sha256": {
+    "IMPLEMENTATION_REPORT.md": "903a0c923787dbbff110103dbaed8b73f41ee7e902e5172209521c3d588ac4cf",
+    "REGRESSION_RESULTS.md": "31d9b217a3a8b1108a6aa0df968cef6efe5310aa225ace9e1c249947142d9425",
+    "SCOPED_DIFF.patch": "87cf631192eb962cdc00ac345478150e97f9404fd2c518f7373a14f67ff64a74",
+    ".copilot/CUSTOMER_CHECKPOINT.json": "b300089b1880828be8c37fe6c15a09ae4731c6a6d4c8d408b7ea5d6dd3dcf716",
+    ".copilot/OPERATOR_PLAN.json": "1d174d06cd55992d5abf83d67ed9684f917b8b1dc0a253e32e413c606fdfe912",
+    "components/dura_board/dura_board.c": "67c1ae8d106c4d4c77b64fdea93de05c2316fa934f9aa8cadcd5e249660db6bb",
+    "components/dura_meter/dura_meter.c": "812f9d56f4239a985aea0fce802341e0db1c9ae0d93dd1f59445d3b9850afe21",
+    "components/dura_meter/include/dura_meter.h": "7454343e76bc774736414853f1f4e604698ea88fc20486d7539ea8faf0a161fc",
+    "scripts/test_precal_profile_paths.py": "c4b799187c7dbe939811c93bb83d13b7a9e2189c2706ec76a32b8f61aa872e74",
+    "scripts/test_calibration_workflow_contract.py": "607e6d4a4e1e954074e1b4d7aba4c1fe229d395b43651cfd9ee07a96776db001",
+    "tests/home_volume_ui.c": "d142fad148f00d5025041bb43c60885c9829cc102ad8b742dbe0670af69a3029",
+    "MILTON_HANDOFF.md": "b81296b3d0e4f6e55d653f6f34752e33aff163ab7bf056dc18ef4d4ff75bcb03"
+  }
+}

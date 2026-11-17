@@ -21,6 +21,7 @@ void gama_blefob_config_init_default(gama_blefob_config_t *config)
 	config->project_id = CONFIG_BLE_SHELL_PROJECT_ID;
 	config->module_name = CONFIG_BLE_SHELL_MODULE_NAME;
 	config->module_version = CONFIG_BLE_SHELL_MODULE_VERSION;
+	/* Kconfig fallback only; M3000 app_main overwrites with DURA_METER_FIRMWARE_VERSION. */
 	config->firmware_version = CONFIG_BLE_SHELL_FIRMWARE_VERSION;
 	config->default_serial_id = BLE_SHELL_DEFAULT_SERIAL;
 	config->default_pair_window_seconds = CONFIG_BLE_SHELL_PAIR_ADV_SECONDS;
@@ -62,6 +63,7 @@ void ble_shell_apply_app_config(const gama_blefob_config_t *config)
 	strlcpy(s_app_cfg.project_id, ble_shell_nonempty(config->project_id, CONFIG_BLE_SHELL_PROJECT_ID), sizeof(s_app_cfg.project_id));
 	strlcpy(s_app_cfg.module_name, ble_shell_nonempty(config->module_name, CONFIG_BLE_SHELL_MODULE_NAME), sizeof(s_app_cfg.module_name));
 	strlcpy(s_app_cfg.module_version, ble_shell_nonempty(config->module_version, CONFIG_BLE_SHELL_MODULE_VERSION), sizeof(s_app_cfg.module_version));
+	/* App-provided firmware_version always wins over CONFIG_BLE_SHELL_FIRMWARE_VERSION. */
 	strlcpy(s_app_cfg.firmware_version, ble_shell_nonempty(config->firmware_version, CONFIG_BLE_SHELL_FIRMWARE_VERSION), sizeof(s_app_cfg.firmware_version));
 	strlcpy(s_app_cfg.default_serial_id, ble_shell_nonempty(config->default_serial_id, BLE_SHELL_DEFAULT_SERIAL), sizeof(s_app_cfg.default_serial_id));
 	s_app_cfg.default_pair_window_seconds = config->default_pair_window_seconds;

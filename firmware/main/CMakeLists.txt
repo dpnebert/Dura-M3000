@@ -18,6 +18,7 @@ set(dura_main_requires
     network_provisioning
     esp_http_client
     esp_https_ota
+    app_update
     bootloader_support
     esp-tls
 )

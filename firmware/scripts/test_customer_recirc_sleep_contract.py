@@ -147,12 +147,16 @@ assert re.search(
     board,
     re.DOTALL,
 ), "Recirc edit screen must match the supplied text and soft keys"
+# Cycle 2 (OWNER_UPDATE_NATIVE item 2, part-16): the operating screen drops
+# "Press Start to begin." and shows the amount plus Flow/units row.
+_recirc_run = re.search(r"static void render_recirc_run\(.*?\n\}", board, re.DOTALL)
+assert _recirc_run, "render_recirc_run missing"
+assert "Press Start to begin." not in _recirc_run.group(0)
+assert "render_operating_amount(meter);" in _recirc_run.group(0)
 assert re.search(
-    r"render_recirc_run.*?Press Start to begin\..*?Press Stop to end\..*?"
-    r"Back.*?NULL.*?Stop.*?Start",
-    board,
-    re.DOTALL,
-), "Recirc run screen must expose Home / blank / Stop / Start"
+    r'draw_legacy_buttons\("Back", NULL, "Stop", "Start"\);',
+    _recirc_run.group(0),
+), "Recirc run screen must expose Back / blank / Stop / Start"
 # M-3000 product naming preserves genuine legacy artwork, not a literal label.
 check_customer_title(project)
 assert '"Power: %u%%"' not in board[board.index('static void render_manual_run'):board.index('static void render_recirc_edit')]
@@ -162,13 +166,16 @@ manual_render = re.search(
     re.DOTALL | re.MULTILINE,
 )
 assert manual_render, "missing Manual-screen renderer"
+# Cycle 2 (OWNER_UPDATE_NATIVE item 2, part-15): Manual adds the Batch/Total
+# header and the Flow/units row. 40 pt digits (39 px ink) cannot fit between
+# them above the softkeys, so the amount uses the right-aligned 24 pt digits
+# (decision recorded for Daniel). Frame bounds: tests/m3000_fix_cycle2.c.
 assert re.search(
-    r"draw_num40_right\s*\(\s*128\s*,\s*12\s*,\s*amount\s*\)",
+    r"draw_num24_text\s*\(\s*width\s*<\s*DURA_LCD_WIDTH\s*\?\s*\(uint8_t\)\(DURA_LCD_WIDTH\s*-\s*width\)\s*:\s*0u\s*,\s*15\s*,\s*amount\s*\)",
     manual_render.group(0),
-), "Manual amount must retain the approved large 40-point, right-aligned renderer"
-assert "draw_num24" not in manual_render.group(0), (
-    "Manual amount must not regress to the smaller 24-point renderer"
-)
+), "Manual amount must be right-aligned above the Flow/units row"
+assert "num24_text_width(amount)" in manual_render.group(0)
+assert "draw_operating_flow_and_units(meter);" in manual_render.group(0)
 
 assert re.search(r"s_ui_screen\s*=\s*DURA_UI_MAIN_MENU", board), (
     "startup UI must initialize to the Main Menu"

@@ -1,0 +1,160 @@
+diff --git "a/C:\\Users\\Dan\\HermesWork\\m3000-copilot-handoff-20261106\\native-evidence\\authorized-feature-stage-before-20261106T141500Z\\dura_board.c.before" "b/C:\\Users\\Dan\\HermesWork\\m3000-copilot-handoff-20261106\\candidate-native\\components\\dura_board\\dura_board.c"
+index 1cde3a0..9a8a9b0 100644
+--- "a/C:\\Users\\Dan\\HermesWork\\m3000-copilot-handoff-20261106\\native-evidence\\authorized-feature-stage-before-20261106T141500Z\\dura_board.c.before"
++++ "b/C:\\Users\\Dan\\HermesWork\\m3000-copilot-handoff-20261106\\candidate-native\\components\\dura_board\\dura_board.c"
+@@ -978,48 +978,6 @@ static uint8_t draw_legacy_font_char(int x, int y, char ch, bool inverted)
+ 
+ static int draw_legacy_text_aligned(char orient, int x, int y, const char *text, bool inverted)
+ {
+-    if ((orient == 'C' || orient == 'R') && legacy_text_width(&dura_font_ui_small, text) > 126) {
+-        char line[256];
+-        char pending[256];
+-        char word[256];
+-        const char *cursor = text;
+-        int line_y = y;
+-        pending[0] = '\0';
+-
+-        while (*cursor != '\0') {
+-            while (*cursor == ' ') ++cursor;
+-            if (*cursor == '\0') break;
+-            size_t word_len = 0;
+-            while (cursor[word_len] != '\0' && cursor[word_len] != ' ') {
+-                if (word_len + 1u < sizeof(word)) word[word_len] = cursor[word_len];
+-                ++word_len;
+-            }
+-            word[word_len < sizeof(word) ? word_len : sizeof(word) - 1u] = '\0';
+-            cursor += word_len;
+-            snprintf(line, sizeof(line), "%s%s%s", pending,
+-                     pending[0] == '\0' ? "" : " ", word);
+-            if (line[0] != '\0' && legacy_text_width(&dura_font_ui_small, line) > 126) {
+-                int xa = 64 - (legacy_text_width(&dura_font_ui_small, pending) / 2) + 1;
+-                for (const char *p = pending; *p != '\0'; ++p) {
+-                    if ((uint8_t)*p <= ' ') xa += dura_font_ui_small.space_width;
+-                    else xa += draw_legacy_font_char(xa, line_y, *p, inverted) + 1;
+-                }
+-                line_y += 10;
+-                snprintf(pending, sizeof(pending), "%s", word);
+-            } else {
+-                snprintf(pending, sizeof(pending), "%s", line);
+-            }
+-        }
+-        if (pending[0] != '\0') {
+-            int xa = 64 - (legacy_text_width(&dura_font_ui_small, pending) / 2) + 1;
+-            for (const char *p = pending; *p != '\0'; ++p) {
+-                if ((uint8_t)*p <= ' ') xa += dura_font_ui_small.space_width;
+-                else xa += draw_legacy_font_char(xa, line_y, *p, inverted) + 1;
+-            }
+-        }
+-        return x;
+-    }
+-
+     int xa = x;
+     if (orient == 'C' || orient == 'R') {
+         const int w = legacy_text_width(&dura_font_ui_small, text);
+@@ -1237,8 +1195,8 @@ static void render_setup(const dura_meter_snapshot_t *meter)
+         break;
+     case 9:
+         draw_legacy_menu_screen("Confirm Reset",
+-                                "Custom settings are replaced, including saved calibration values. Are you sure?",
+-                                NULL, NULL, NULL, "Home", "Yes", NULL, "Home");
++                                "Custom settings are replaced,", "including saved calibration",
++                                "values. Are you sure?", NULL, "Home", "Yes", NULL, "Home");
+         break;
+     case 48:
+         draw_legacy_menu_screen("Dura Products", "Dura Meter", "Made in U.S.A.", NULL, NULL, "Home", NULL, "Help", "Next");
+@@ -2076,7 +2034,12 @@ static bool choose_precal_fluid(uint8_t profile_index)
+     }
+     if (err == ESP_ERR_NOT_FOUND) {
+         ui_go_home();
+-        ui_show_notice("No saved calibration", "Choose another fluid");
++        char name[16];
++        char message[32];
++        if (profile_index == 0u) snprintf(name, sizeof(name), "Water");
++        else snprintf(name, sizeof(name), "Fluid%u", (unsigned)profile_index);
++        snprintf(message, sizeof(message), "%s has no saved value", name);
++        ui_show_notice(message, NULL);
+     } else {
+         ui_show_notice("Save failed", "Retry or Cancel");
+     }
+@@ -2090,7 +2053,9 @@ static bool store_precal_fluid(uint8_t profile_index)
+         char slot[16];
+         if (profile_index == 0u) snprintf(slot, sizeof(slot), "Water");
+         else snprintf(slot, sizeof(slot), "Fluid%u", (unsigned)profile_index);
+-        ui_show_notice("Calibration saved", slot);
++        char message[32];
++        snprintf(message, sizeof(message), "%s has a new saved value", slot);
++        ui_show_notice(message, NULL);
+         return true;
+     }
+     ui_show_notice("Save failed", "Retry or Cancel");
+@@ -2273,7 +2238,11 @@ static void dura_board_handle_button(dura_button_t b)
+     case DURA_UI_BUCKET_GAL:
+     case DURA_UI_BUCKET_LITER:
+         if (b == DURA_BUTTON_UP) { ui_cancel_calibration_to_start(); }
+-        else if (b == DURA_BUTTON_DOWN) { s_ui_help_page = 0u; s_ui_screen = (s_ui_screen == DURA_UI_BUCKET_LITER) ? DURA_UI_CAL_HELP_LITER : DURA_UI_CAL_HELP_GAL; }
++        else if (b == DURA_BUTTON_DOWN) {
++            s_ui_help_page = 0u;
++            (void)dura_meter_discard_calibration_counts();
++            s_ui_screen = (s_ui_screen == DURA_UI_BUCKET_LITER) ? DURA_UI_CAL_HELP_LITER : DURA_UI_CAL_HELP_GAL;
++        }
+         else if (b == DURA_BUTTON_SELECT) { (void)dura_meter_reset_calibration(); }
+         else if (b == DURA_BUTTON_BACK) {
+             const esp_err_t err = dura_meter_continue_calibration();
+@@ -2285,7 +2254,7 @@ static void dura_board_handle_button(dura_button_t b)
+                 snprintf(counts, sizeof(counts), "%lu", (unsigned long)after.calibration_counts);
+                 ui_show_notice("Cal Counts", counts);
+             } else if (after.calibration_mode == DURA_CAL_RUNNING) {
+-                ui_show_notice("Not enough flow", "Counts reset; retry");
++                ui_show_notice("Not enough fluid flow detected", NULL);
+             }
+         }
+         break;
+diff --git "a/C:\\Users\\Dan\\HermesWork\\m3000-copilot-handoff-20261106\\native-evidence\\authorized-feature-stage-before-20261106T141500Z\\dura_meter.c.before" "b/C:\\Users\\Dan\\HermesWork\\m3000-copilot-handoff-20261106\\candidate-native\\components\\dura_meter\\dura_meter.c"
+index c5d775e..f6db50b 100644
+--- "a/C:\\Users\\Dan\\HermesWork\\m3000-copilot-handoff-20261106\\native-evidence\\authorized-feature-stage-before-20261106T141500Z\\dura_meter.c.before"
++++ "b/C:\\Users\\Dan\\HermesWork\\m3000-copilot-handoff-20261106\\candidate-native\\components\\dura_meter\\dura_meter.c"
+@@ -1010,6 +1010,18 @@ esp_err_t dura_meter_reset_calibration(void)
+     return err;
+ }
+ 
++esp_err_t dura_meter_discard_calibration_counts(void)
++{
++    METER_LOCK();
++    if (s_meter.calibration_mode != DURA_CAL_RUNNING) {
++        METER_UNLOCK();
++        return ESP_ERR_INVALID_STATE;
++    }
++    s_meter.calibration_counts = 0;
++    METER_UNLOCK();
++    return ESP_OK;
++}
++
+ esp_err_t dura_meter_cancel_calibration(void)
+ {
+     METER_LOCK();
+diff --git "a/C:\\Users\\Dan\\HermesWork\\m3000-copilot-handoff-20261106\\native-evidence\\authorized-feature-stage-before-20261106T141500Z\\test_precal_profile_paths.py.before" "b/C:\\Users\\Dan\\HermesWork\\m3000-copilot-handoff-20261106\\candidate-native\\scripts\\test_precal_profile_paths.py"
+index 6f81369..5a433b6 100644
+--- "a/C:\\Users\\Dan\\HermesWork\\m3000-copilot-handoff-20261106\\native-evidence\\authorized-feature-stage-before-20261106T141500Z\\test_precal_profile_paths.py.before"
++++ "b/C:\\Users\\Dan\\HermesWork\\m3000-copilot-handoff-20261106\\candidate-native\\scripts\\test_precal_profile_paths.py"
+@@ -75,7 +75,9 @@ static void bucket(unsigned slot,unsigned units,float amount) {
+     if(slot>=3) ui_button(DURA_BUTTON_BACK);
+     ui_button((dura_button_t)(1+slot%3));
+     CHECK(s_ui_screen==DURA_UI_MAIN_MENU);
+-    CHECK(!strcmp(s_ui_notice_line1,"Calibration saved"));
++    char expected_notice[40];
++    snprintf(expected_notice,sizeof(expected_notice),"%s has a new saved value",slot==0?"Water":(slot==1?"Fluid1":slot==2?"Fluid2":slot==3?"Fluid3":slot==4?"Fluid4":"Fluid5"));
++    CHECK(!strcmp(s_ui_notice_line1,expected_notice));
+     CHECK(snap().selected_precal_profile==slot); off();
+ }
+ static void recall_ui(unsigned slot) {
+@@ -114,7 +116,9 @@ static void empty_slot(unsigned slot) {
+     CHECK(write_calls==writes_before); unchanged();
+     recall_ui(slot);
+     CHECK(s_ui_screen==DURA_UI_MAIN_MENU); /* Retained reference also goes Home. */
+-    CHECK(!strcmp(s_ui_notice_line1,"No saved calibration")); unchanged();
++    char expected_notice[40];
++    snprintf(expected_notice,sizeof(expected_notice),"%s has no saved value",slot==0?"Water":(slot==1?"Fluid1":slot==2?"Fluid2":slot==3?"Fluid3":slot==4?"Fluid4":"Fluid5"));
++    CHECK(!strcmp(s_ui_notice_line1,expected_notice)); unchanged();
+     CHECK(dura_meter_load()==ESP_OK); unchanged();
+ }
+ static void failure_setup(bool store) {
